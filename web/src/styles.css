@@ -220,10 +220,15 @@ main:focus {
 .stage {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  /* 40px at every width: on phones the frame's "1/5" caption must not read as a label of the
-     panel heading below it */
-  gap: var(--space-6);
+  gap: var(--space-4);
   align-items: start;
+}
+/* image 1 once delivered, below the stage while the stage shows a later image */
+.earlier {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-6);
 }
 /* phones: the word form comes straight after the heading, so it is on the first screen */
 @media (max-width: 819px) {
@@ -242,6 +247,7 @@ main:focus {
 @media (min-width: 820px) {
   .stage {
     grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    gap: var(--space-6);
   }
 }
 .panel {

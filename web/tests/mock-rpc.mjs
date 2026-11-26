@@ -399,6 +399,103 @@ const scenarios = {
       await browser.close();
     }
   },
+  // Revision 5 findings: a delivery seen by the poll uses only the gateway when it answers; image 1
+  // stays on play while image 2 takes words; the add button fits at 390x790; the imd swarm link
+  // is in about's first paragraph.
+  async revision5() {
+    const FIFTH = keccak256(toHex("fifth-word-tx"));
+    const GW = "https://imd-ipfs.xyz/ipfs/bafyresult/artifacts/print.png";
+    const W5 = ["lantern", "under", "soft", "moss", "arches"];
+    const delivered = () => img({ status: 3, wordCount: 5, words: W5, orders: 1, opensAt: now() - 9000, orderedAt: now() - 600, uri: "ipfs://bafyresult/result.json" });
+    const shown = (page, sel = ".frame", timeout = 15000) =>
+      page.waitForFunction((sel) => { const i = document.querySelector(`${sel} img.frame-img:not(.loading)`); return i && i.complete && i.naturalWidth > 0 ? i.src : null; }, sel, { timeout }).then((h) => h.jsonValue(), () => null);
+    const fallbackAsked = (S) => (S.getLogs ?? []).length + S.netLog.filter((u) => u.includes("api.imd.fun")).length;
+
+    // 1. Ordered, then delivered on the next 12-second poll, with the gateway answering 200.
+    {
+      const S = baseState({
+        currentImage: 2, imagesOrdered: 1, totalSupply: 5, fifthTx: FIFTH, net: { gateway: 200, intake: 200, job: 200, api: 200 },
+        images: [img({ status: 1, wordCount: 5, words: W5, orders: 1, opensAt: now() - 9000, orderedAt: now() - 600 }), img({ opensAt: now() + 5 * 3600 }), img(), img(), img()],
+      });
+      const { browser, page, errors } = await open(S, { hash: "#/image/1" });
+      await page.getByText("ordered, the swarm is drawing it").first().waitFor();
+      S.images[0] = delivered();
+      S.imageURI[0] = "ipfs://bafyresult/artifacts/print.png";
+      check("poll delivery: the print loads from the gateway", (await shown(page, ".frame", 20000)) === GW);
+      await page.waitForTimeout(1500);
+      check("poll delivery: no fallback request after the gateway loaded (getLogs + api.imd.fun)", fallbackAsked(S) === 0,
+        `getLogs ${(S.getLogs ?? []).length}, api ${S.netLog.filter((u) => u.includes("api.imd.fun")).join(" ")}`);
+      check("poll delivery: no page errors", !errors.length, errors.join(" | "));
+      await browser.close();
+    }
+    // 2. Image 2 opens while play is shown: image 1's print stays on play below the stage.
+    {
+      const S = baseState({
+        currentImage: 2, imagesOrdered: 1, totalSupply: 5, net: { gateway: 200 },
+        images: [delivered(), img({ opensAt: now() + 4 }), img(), img(), img()],
+        imageURI: ["ipfs://bafyresult/artifacts/print.png", "", "", "", ""],
+      });
+      const { browser, page, errors } = await open(S);
+      check("play before image 2 opens: image 1's print shown", (await shown(page)) === GW);
+      await page.getByText("image 2 of 5").waitFor({ timeout: 10000 }).catch(() => {});
+      await page.waitForTimeout(800);
+      const after = await shown(page, ".frame", 3000);
+      const heading = await page.locator("#panel-title").innerText();
+      check("play after image 2 opens: the panel takes words for image 2", heading === "image 2 of 5", heading);
+      check("play after image 2 opens: image 1's print is still on /", after === GW, String(after));
+      check("play after image 2 opens: one picture, two frames", (await page.locator("main img.frame-img").count()) === 1 && (await page.locator("main .frame").count()) === 2);
+      const capts = await page.locator("main .frame .caption").allInnerTexts();
+      check("play after image 2 opens: captions read 2/5 then 1/5 delivered", /2\/5/.test(capts[0] ?? "") && /1\/5\s*delivered/.test(capts[1] ?? ""), capts.join(" | "));
+      check("play after image 2 opens: no sideways scroll, frames fine", !(await framesOk(page)).length);
+      await page.screenshot({ path: join(shots, "play-image2-open-390.png"), fullPage: true });
+      check("play image 2 open: no page errors", !errors.length, errors.join(" | "));
+      await browser.close();
+    }
+    // 3. 390x790, before image 2 opens: the add button fits on the first screen.
+    {
+      const S = baseState({
+        currentImage: 2, imagesOrdered: 1, totalSupply: 5, net: { gateway: 200 },
+        images: [delivered(), img({ opensAt: now() + 5 * 3600 }), img(), img(), img()],
+        imageURI: ["ipfs://bafyresult/artifacts/print.png", "", "", "", ""],
+      });
+      const { browser, page } = await open(S, { viewport: { width: 390, height: 790 } });
+      await shown(page);
+      const box = await page.getByRole("button", { name: /^add · / }).boundingBox();
+      check("390x790: the add button is fully on the first screen", !!box && box.y + box.height <= 790, box ? `${Math.round(box.y)}-${Math.round(box.y + box.height)}` : "no button");
+      await page.screenshot({ path: join(shots, "play-390x790.png") });
+      // 5. The sentence leaves the frame only after the picture's decode() has resolved.
+      await page.context().addInitScript(() => {
+        const log = (window.__decodeLog = []);
+        const orig = HTMLImageElement.prototype.decode;
+        HTMLImageElement.prototype.decode = function () {
+          log.push(["decode-called", performance.now()]);
+          // a slow decode, so a reveal on load alone would show a white frame first
+          return new Promise((r) => setTimeout(r, 400)).then(() => orig.call(this)).then(() => log.push(["decoded", performance.now()]));
+        };
+        new MutationObserver(() => {
+          const f = document.querySelector(".frame");
+          if (f && f.querySelector("img.frame-img") && !f.querySelector(".sentence") && !log.some((x) => x[0] === "sentence-gone")) log.push(["sentence-gone", performance.now()]);
+        }).observe(document, { subtree: true, childList: true });
+      });
+      await page.reload();
+      await shown(page);
+      const log = await page.evaluate(() => window.__decodeLog);
+      const at = (k) => log.find((x) => x[0] === k)?.[1];
+      check("decode: the sentence is removed only after decode() resolved", at("decoded") !== undefined && at("sentence-gone") !== undefined && at("sentence-gone") >= at("decoded"), JSON.stringify(log));
+      await browser.close();
+    }
+    // 4. About: the imd swarm link is in the first paragraph.
+    {
+      const { browser, page } = await open(baseState(), { hash: "#/about" });
+      await page.getByRole("heading", { name: "how this was built" }).waitFor();
+      const first = page.locator(".page.prose > p").first();
+      const links = await first.locator("a").evaluateAll((as) => as.map((a) => [a.textContent, a.getAttribute("href")]));
+      check("about: the first paragraph holds the imd swarm link", links.length === 1 && links[0][0] === "imd swarm" && links[0][1] === "https://imd.fun", JSON.stringify(links));
+      const t = await first.innerText();
+      check("about: the first paragraph keeps both the intro and the explanation", t.startsWith("a mini experiment in multiplayer ai.") && t.includes("after five images it ends: 25 nfts, one per word."), t);
+      await browser.close();
+    }
+  },
   async about() {
     for (const vp of [{ width: 390, height: 844 }, { width: 320, height: 700 }, { width: 1440, height: 900 }]) {
       const { browser, page, errors } = await open(baseState(), { viewport: vp, hash: "#/about" });

@@ -100,6 +100,9 @@ function Play({ game }: { game: Game | undefined }) {
   // Between rounds the frame keeps showing the image just ordered, and flips when it arrives.
   const focus = !game ? 1 : cur === 0 ? IMAGES : open || cur === 1 ? cur : cur - 1;
   const info = game?.images[focus - 1];
+  // Image 1 stays on play once delivered: below the stage whenever the stage shows another image.
+  const first = game?.images[0];
+  const showFirst = focus !== 1 && first?.status === "delivered";
 
   return (
     <div className="play">
@@ -147,6 +150,15 @@ function Play({ game }: { game: Game | undefined }) {
           </p>
         </section>
       </div>
+      {showFirst && first && (
+        <section className="earlier" aria-labelledby="earlier-title">
+          <h2 id="earlier-title">image 1</h2>
+          <Frame image={first} />
+          <p className="note">
+            <a href="#/image/1">image 1: words and holders</a>
+          </p>
+        </section>
+      )}
     </div>
   );
 }
@@ -292,9 +304,8 @@ function About() {
   return (
     <div className="page prose">
       <h1>about</h1>
-      <p>a mini experiment in multiplayer ai.</p>
       <p>
-        five strangers write one image prompt, one word each. when the fifth word lands, the contract orders the image from the{" "}
+        a mini experiment in multiplayer ai. five strangers write one image prompt, one word each. when the fifth word lands, the contract orders the image from the{" "}
         <a href={IMD_SITE} target="_blank" rel="noreferrer">
           imd swarm
         </a>{" "}

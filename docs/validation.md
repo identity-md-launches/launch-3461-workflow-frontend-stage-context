@@ -41,7 +41,50 @@ The frontend stage of launch `a9881956-4bea-4ae1-885e-94a534f54cdf`. Contract `F
 - Live mainnet reads through the contributor RPC at build time: `currentImage()` = 1,
   `amountDue()` = 0.1 IMD, `totalSupply()` = 0, and code is present (16,509 bytes).
 
-## Revision 4: delivered images and the about page (this round)
+## Revision 5: review findings (this round)
+
+Five findings were reported against revision 4. Each was first reproduced with the new
+`revision5` scenario in `web/tests/mock-rpc.mjs` (Chromium headless shell 1248 via Playwright,
+390x844 unless stated) against the previously accepted export (`git archive HEAD dist`), then fixed
+and checked on the rebuilt export. Old export: 6 passed, 8 failed in `revision5`. New export: 15
+passed, 0 failed.
+
+| Finding | Reproduced on the old export | Fix | Check on the new export |
+| --- | --- | --- | --- |
+| A delivery seen by the poll asked the IMD API although the gateway answered (high, `9f48ec5c…`) | `/#/image/1` with image 1 ordered and `imageURI` empty, then delivered with `ipfs://bafyresult/artifacts/print.png` on the next 12 s poll, gateway 200: the print loaded from the gateway, but the page also sent 1 `eth_getLogs`, `GET /intake/1/0x2556f3f9…923ed` and `GET /jobs/job-1234/result` | The `stage` state (which started as `"api"` while there was no gateway URL and stayed so for one render after the delivery) is gone. The API query is enabled only when the delivered image has no gateway URL or the `<img>` reported an error for that gateway URL in the current attempt (`web/src/Frame.tsx:29`). Errors are recorded as `"<attempt> <url>"` keys and compared, so a new image URL or attempt starts clean without an effect resetting it | 0 `eth_getLogs` and 0 `api.imd.fun` requests after the gateway load. The `delivered` scenario still shows the API fallback on a gateway 403, "image unavailable" when both fail, and recovery on the next refresh |
+| The imd swarm link was in About's second paragraph (high, `75dad411…`) | first `.page.prose > p` was "a mini experiment in multiplayer ai." with 0 links | The intro sentence and the explanation are one `<p>`, with the existing link and both sentences (`web/src/App.tsx:308`) | the first paragraph holds exactly one link, "imd swarm" → `https://imd.fun`, and both sentences. The `about` scenario still passes at 320, 390 and 1440 |
+| Image 1 left play when image 2 opened (high, `bde58b64…`) | `/` with image 1 delivered and image 2 opening 4 s later: after the countdown, 0 images on play and one frame reading "2/5 0 of 5 words" | The stage is unchanged (the open round). When the stage shows another image and image 1 is delivered, `Play` renders a section `.earlier` right below the stage: `h2` "image 1", the existing `Frame` for image 1 and a link to its page (`web/src/App.tsx:105`, `:153`, `web/src/styles.css:227`) | after image 2 opens the panel reads "image 2 of 5", the play page has two frames ("2/5 …" then "1/5 delivered") and image 1's print loaded from the gateway. No sideways scroll |
+| The 40px mobile stage gap pushed the add button below 790px (medium, `8940341e…`) | 390x790: "add · 0.1 IMD" at y=761–805 | `.stage` gap is 16px (`--space-4`) under 820px again and 40px (`--space-6`) inside the 820px query (`web/src/styles.css:223`, `:250`), as before revision 4 | 390x790: the button ends at or above y=790 (fully on the first screen). See the probe's `eyebrows` result below: that is the cost of this change |
+| The frame could flash white before the print painted (medium, `bd2b704b…`) | with `HTMLImageElement.decode` instrumented to take 400 ms, the old export removed the sentence 121 ms after start and never called `decode()` | `onLoad` calls the element's `decode()` and reveals the print only when it resolves and the same element still shows the same source in the same attempt (`ref` plus a `data-key`). A rejected decode takes the existing error path (`web/src/Frame.tsx:70`) | the sentence is removed only after `decode()` resolved. The 4x CPU-throttled cold-load paint race itself was not re-created; the check pins down the ordering the finding asks for |
+
+### Checks run on the final export
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Typecheck and production build | `cd web && npm run build` (runs `tsc -p tsconfig.json` first) | passed, no type errors. Manifest script: "1 contract(s), 10 assets", 1,405,807 bytes |
+| Mocked interaction, full suite | `cd web && node tests/mock-rpc.mjs` | **120 passed, 0 failed** (including `revision5`, 15 checks) |
+| Design probe | `IMD_PLAYWRIGHT=web/node_modules/playwright/index.mjs node .imd/reads/skills/design-critic/scripts/taste.mjs --out test/scratch/taste` (live network) | **14/16**. `type-faces` fails as in every round (monospace prose, from the brief's "black monospace"). `eyebrows` fails again: at 390 the frame's "1 / 5" caption sits within 40px above the panel heading "image 1 of 5". It is the image's own data caption inside the frame's border, not a kicker. Revision 4 had widened the gap to 40px to silence it; finding `8940341e…` showed that costs the add button on 790px-tall phones, and the primary action on the first screen wins. The 390 screenshot (live image 1 from imd-ipfs.xyz) shows the headline, lede, image 1, "image 1 of 5", the countdown, the word input and "add · 0.1 IMD" |
+| Fork interaction | `web/tests/interaction.mjs` | not run: no `anvil` on this machine |
+
+Chromium's missing system libraries and fonts were unpacked from Ubuntu packages into
+`test/scratch/` (`LD_LIBRARY_PATH`, a local fontconfig file). WebKit, screen readers and physical
+phones were not used.
+
+### Better Interface review of the changed surfaces
+
+| Domain | Coverage | Notes |
+| --- | --- | --- |
+| Accessibility | Checked | The new section has its own `h2` and `aria-labelledby`; image 1's picture keeps its alt text "image 1: <five words>"; the link has a visible name. Screen reader not used |
+| Layout | Checked | Mobile stage gap back to 16px; the main action fits at 390x790 and 390x844. The image 1 section sits below the stage at every width with the existing 40px section rhythm, no sideways scroll (measured at 390) |
+| Writing | Checked | About copy unchanged word for word; the two paragraphs became one. The new heading is plain ("image 1") |
+| Typography | Checked | No new sizes or weights; probe `type-sizes` and `tracking` pass |
+| Colors | Checked | No new colours; probe `contrast` passes |
+| UI | Checked | Loading state now ends at decode, not at load; error, retry and fallback states unchanged and re-tested |
+
+Remaining limitation: probe `eyebrows` (above), and the rendered checks named above that were not
+performed.
+
+## Revision 4: delivered images and the about page
 
 ### What changed
 
@@ -49,7 +92,7 @@ The frontend stage of launch `a9881956-4bea-4ae1-885e-94a534f54cdf`. Contract `F
 | --- | --- | --- |
 | Images showed "image unavailable": ipfs.io and dweb.link answer image requests with a bot check (403) | A delivered image loads from `https://imd-ipfs.xyz/ipfs/<CID>/artifacts/print.png` first. On error the site finds the fifth word's transaction (`WordAdded` with `image`, `slot = 5`, looked up in the block whose timestamp is the image's `orderedAt`, found by stepping 12-second slots from the latest block), reads `entries[0].admission.result.jobId` from `GET https://api.imd.fun/intake/1/<tx>`, then shows the `url` of the file named `print` from `GET https://api.imd.fun/jobs/<id>/result`. If both fail, the sentence stays with "image unavailable" and the next contract refresh (12 s) starts again from the gateway. ipfs.io and dweb.link are no longer used | `web/src/image-source.ts`, `web/src/Frame.tsx`, `web/src/config.ts` (`IMD_IPFS_GATEWAY`, `IMD_API`), `web/src/game.ts` (`readAt` per image) |
 | About: only "what will you build?" is a link | The sentence "this is just a tiny five word example." is plain text, then the link to `https://explorer.imd.fun/launch` | `web/src/App.tsx` `About` |
-| About: link "imd swarm" to https://imd.fun | Linked. The about page's first line, "a mini experiment in multiplayer ai.", does not contain "imd swarm"; the first paragraph that does is the next one, and that is where the link is | `web/src/App.tsx` `About`, `IMD_SITE` in `config.ts` |
+| About: link "imd swarm" to https://imd.fun | Linked. In revision 4 the link was in the second paragraph; revision 5 merged the first two paragraphs so it is in the first | `web/src/App.tsx` `About`, `IMD_SITE` in `config.ts` |
 | About: IMD address under "where to get imd" | "imd address: 0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7", linked to `https://etherscan.io/token/<address>`. The address comes from the manifest's `network.pairToken` (the same value as the deployment's `imd_` constructor argument), the explorer from `network.explorer`; nothing new is hard-coded | `web/src/App.tsx` `About` |
 | About: last section "how this was built" | `h2` "how this was built" and "built by a distributed swarm of agents (imd). see the prompt and job breakdown.", with "prompt and job breakdown" linked to `https://explorer.imd.fun/jobs/7c1baf52-c412-4eff-9dc7-612016bac5d8` | `web/src/App.tsx` `About`, `BUILD_JOB` in `config.ts` |
 

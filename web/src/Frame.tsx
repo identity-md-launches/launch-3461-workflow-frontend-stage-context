@@ -1,10 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type SyntheticEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { IMAGES, WORDS, type ImageInfo } from "./game";
 import { useDeployment } from "./deployment";
 import { apiImageUrl, gatewayImageUrl } from "./image-source";
-
-type Stage = "gateway" | "api" | "failed";
 
 /**
  * One white frame per image. Until the image arrives the sentence builds inside it, word by word,
@@ -12,63 +10,82 @@ type Stage = "gateway" | "api" | "failed";
  * and the caption are separate rows, so the caption never covers words.
  *
  * A delivered picture loads from the IMD IPFS gateway first, then from the URL the IMD API gives
- * (`image-source.ts`). When both fail the sentence stays, the caption says "image unavailable",
- * and the next game refresh (every 12 seconds) tries again from the gateway. The full result URI
- * is on the image's page.
+ * (`image-source.ts`). The API is asked only when there is no gateway URL or the picture element
+ * has reported an error for that gateway URL in the current attempt. When both fail the sentence
+ * stays, the caption says "image unavailable", and the next game refresh (every 12 seconds) tries
+ * again from the gateway. The full result URI is on the image's page.
  */
 export function Frame({ image, size = "large" }: { image: ImageInfo; size?: "large" | "small" }) {
   const d = useDeployment();
   const delivered = image.status === "delivered";
   const gateway = delivered ? gatewayImageUrl(image) : null;
-  const [stage, setStage] = useState<Stage>(gateway ? "gateway" : "api");
   const [attempt, setAttempt] = useState(0);
   const phrase = image.words.slice(0, image.wordCount).join(" ");
 
-  // A new result URI starts over from the gateway.
-  useEffect(() => {
-    setStage(gateway ? "gateway" : "api");
-  }, [gateway]);
+  // Errors are recorded against the source and attempt they happened for, so a new result URI or
+  // a new attempt starts clean without an effect having to reset anything first.
+  const gatewayKey = `${attempt} ${gateway ?? ""}`;
+  const [gatewayError, setGatewayError] = useState<string | null>(null);
+  const useApi = delivered && (!gateway || gatewayError === gatewayKey);
+
+  const api = useQuery({
+    queryKey: ["api-image", d.address, image.n, image.uri, attempt],
+    enabled: useApi,
+    retry: false,
+    staleTime: Infinity,
+    queryFn: () => apiImageUrl(d, image),
+  });
+  const apiUrl = useApi ? (api.data ?? null) : null;
+  const [apiError, setApiError] = useState<string | null>(null);
+  const failed = useApi && (api.isError || (!!apiUrl && apiError === `${attempt} ${apiUrl}`));
 
   // Both sources failed: try again on the next refresh of the game read.
   const lastRead = useRef(image.readAt);
   useEffect(() => {
     if (image.readAt === lastRead.current) return;
     lastRead.current = image.readAt;
-    if (stage === "failed") {
-      setAttempt((a) => a + 1);
-      setStage(gateway ? "gateway" : "api");
-    }
-  }, [image.readAt, stage, gateway]);
+    if (failed) setAttempt((a) => a + 1);
+  }, [image.readAt, failed]);
 
-  const api = useQuery({
-    queryKey: ["api-image", d.address, image.n, image.uri, attempt],
-    enabled: delivered && stage === "api",
-    retry: false,
-    staleTime: Infinity,
-    queryFn: () => apiImageUrl(d, image),
-  });
-  useEffect(() => {
-    if (stage === "api" && api.isError) setStage("failed");
-  }, [stage, api.isError]);
-
-  const src = !delivered ? null : stage === "gateway" ? gateway : stage === "api" ? (api.data ?? null) : null;
-  const failed = delivered && stage === "failed";
-  // The sentence stays in the frame until the picture has finished loading (prints are megabytes).
-  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
-  const loaded = !!src && loadedSrc === src;
+  const src = !delivered || failed ? null : useApi ? apiUrl : gateway;
+  // The sentence stays in the frame until the picture is decoded and ready to paint (prints are
+  // megabytes), so the frame never shows white between the two.
+  const [shownKey, setShownKey] = useState<string | null>(null);
+  const imgKey = src ? `${attempt} ${src}` : null;
+  const loaded = !!imgKey && shownKey === imgKey;
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const onError = () => {
+    if (!src) return;
+    if (src === gateway && !useApi) setGatewayError(gatewayKey);
+    else setApiError(`${attempt} ${src}`);
+  };
+  const onLoad = (e: SyntheticEvent<HTMLImageElement>) => {
+    const el = e.currentTarget;
+    const key = imgKey;
+    const reveal = () => {
+      // Still the same element showing the same source in the same attempt.
+      if (imgRef.current === el && el.dataset.key === key) setShownKey(key);
+    };
+    if (typeof el.decode !== "function") return reveal();
+    el.decode().then(reveal, () => {
+      if (imgRef.current === el && el.dataset.key === key) onError();
+    });
+  };
 
   return (
     <figure className={`frame frame-${size}`}>
       {src && (
         <img
-          key={`${attempt}-${stage}`}
+          key={imgKey!}
+          ref={imgRef}
+          data-key={imgKey!}
           className={loaded ? "frame-img" : "frame-img loading"}
           src={src}
           alt={`image ${image.n}: ${phrase}`}
           aria-hidden={loaded ? undefined : true}
           decoding="async"
-          onLoad={() => setLoadedSrc(src)}
-          onError={() => setStage(stage === "gateway" ? "api" : "failed")}
+          onLoad={onLoad}
+          onError={onError}
         />
       )}
       {!loaded && (

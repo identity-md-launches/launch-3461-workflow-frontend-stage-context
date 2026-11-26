@@ -65,7 +65,8 @@ FORK_URL=https://ethereum-rpc.publicnode.com ANVIL=anvil node tests/interaction.
 `web/tests/mock-rpc.mjs` needs no chain: it serves the built export in Chromium, answers the RPC
 URLs from an in-memory contract state decoded with the deployment ABI, and drives a scripted wallet
 through the frame layout, delivered-image sources (gateway, API fallback, both failing and the
-retry on refresh), about page, price, exact-approval, decline, retry, connect-sheet, holder and
+retry on refresh, a delivery seen by the poll, the sentence kept until `decode()`), image 1 kept on
+play while image 2 takes words, the add button at 390x790, about page, price, exact-approval, decline, retry, connect-sheet, holder and
 keyboard scenarios. It needs only Playwright with a Chromium build:
 
 ```
@@ -81,6 +82,9 @@ block whose timestamp is the image's `orderedAt`), reads `entries[0].admission.r
 `GET https://api.imd.fun/intake/1/<tx hash>`, then shows the `url` of the file named "print" from
 `GET https://api.imd.fun/jobs/<job id>/result`. If both fail the frame keeps the sentence with
 "image unavailable" and tries again on the next refresh of the contract read (every 12 seconds).
+The API is asked only after the gateway URL has failed (or when there is none), never because of
+an earlier state of the frame. Once image 1 is delivered it stays on the play page: in the stage
+while it is the focus, then below the stage while a later image takes words.
 The site no longer uses ipfs.io or dweb.link: both answer image requests with a bot check (403).
 
 Results, the design review and what was not tested are in `docs/validation.md`. The design
