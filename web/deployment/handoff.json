@@ -1,0 +1,33 @@
+{
+  "chainId": 1,
+  "repoUrl": "https://github.com/identity-md-launches/launch-3460-workflow-contract-stage-context",
+  "version": 1,
+  "launchId": "a9881956-4bea-4ae1-885e-94a534f54cdf",
+  "manifest": {
+    "kind": "evm_contracts",
+    "notes": "FiveWords is the only contract of this launch, as the brief asks: an immutable ERC-721 named \"fivewords\", symbol FIVE, 25 NFTs (five images of five words). constructor(IIntake intake_, IERC20 imd_, bytes32 action_) takes three static words, all stated by the brief: intake_ = Intake v2 0xa43e6f75ee006411f79ac1c84120606c2330de82; imd_ = IMD 0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7; action_ = \"job.open@job-1\" as UTF-8 right-padded bytes32. There is no $owner argument because the brief asks for no owner and no owner-only function: the contract has no owner, admin, setter, withdrawal or upgrade path, so neither the factory nor IMD gains any role. The constructor is nonpayable, calls no other contract and needs none to exist; it reverts on a zero address or zero action, and opens image 1 at the deployment block. addWord pulls a fifth of the live Intake.priceOf(action_, imd_) in IMD from the sender and mints that slot's NFT; the fifth word approves exactly the live price and calls requestWithFailure with this contract as callback target. onResult/onFailure accept only the Intake. On mainnet at manifest time the Intake had code and priceOf(job.open@job-1, IMD) returned 0.5 IMD (0.1 IMD per word); the IMD token reports symbol IMD.",
+    "contracts": [
+      {
+        "contract": "FiveWords",
+        "constructorArgs": [
+          "0xa43e6F75ee006411F79Ac1C84120606C2330DE82",
+          "0xD34a99Bc0f67aE1bbd63C660e6d0b0dd03E263B7",
+          "0x6a6f622e6f70656e406a6f622d31000000000000000000000000000000000000"
+        ]
+      }
+    ]
+  },
+  "contracts": [
+    {
+      "name": "FiveWords",
+      "txHash": "0xe7cd773632a2cd6ac7fafb5839606179a690d42dba0833eb26842e01245d98eb",
+      "abiHash": "39546ba2fddb8a2970d587fa0d2162165ea432d32b32c5a14da3478e834e6cda",
+      "address": "0x241cc9f4525d6184b29e0bbc9f8af015dcaa4ea2",
+      "blockNumber": 26496962,
+      "creationCodeHash": "57b0844d45c33e25124b6381d595805cd3e3dc979a06e1e434a2eab169228a91"
+    }
+  ],
+  "sourceCommit": "29c4264743a89978beb3af53dc78fcded3ffe804",
+  "abiInstructions": "Build ABIs from this exact source commit; compare canonicalKeccak(abi) with abiHash. Verify deployed code on the stated chain before enabling transactions.",
+  "attestationHash": "86aa712e66b7c57396b8015702caf265b60238d7edef5c01ea3be0c0d4b968a4"
+}
