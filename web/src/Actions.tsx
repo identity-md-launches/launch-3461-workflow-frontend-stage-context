@@ -54,6 +54,9 @@ const tokenIdText = (v: unknown) => `#${String(v)}`;
 
 type Token = NonNullable<Game["token"]>;
 
+const priceChanged = (now: bigint, token: Token) =>
+  `the price changed to ${fmt(now, token.decimals)} ${token.symbol}. review the amount and press the button again.`;
+
 /**
  * The approval step and the price recheck shared by "add" and "order again". The allowance is set
  * to exactly the quoted price (a larger leftover allowance is replaced, not reused), and the price
@@ -141,22 +144,29 @@ export function AddWord({ game, image, open, opensAt }: { game: Game | undefined
   const wordError = touched && word && !valid ? "a to z only, 1 to 20 letters. no spaces or capitals." : "";
 
   async function submit() {
-    if (!token || !address) return;
+    if (!token || !address || due === null) return;
     setPriceNote("");
     try {
-      await addFlow(token, address);
+      await addFlow(token, address, due);
     } finally {
       await qc.invalidateQueries();
     }
   }
 
-  async function addFlow(token: Token, address: Address) {
+  async function addFlow(token: Token, address: Address, quoted: bigint) {
     // The price is the Intake's and can move: read what is due right before approving it.
     let liveDue: bigint;
     try {
       liveDue = (await d.publicClient.readContract({ address: d.address, abi: d.abi, functionName: "amountDue" })) as bigint;
     } catch {
       setPriceNote(PRICE_UNAVAILABLE);
+      setRefocus((n) => n + 1);
+      return;
+    }
+    // The visitor clicked a button that named a price. If it moved since, ask nothing of the
+    // wallet: the refetch below puts the new amount on the button, the draft stays.
+    if (liveDue !== quoted) {
+      setPriceNote(priceChanged(liveDue, token));
       setRefocus((n) => n + 1);
       return;
     }
@@ -282,7 +292,7 @@ export function Retry({ game, image }: { game: Game | undefined; image: number }
   const priceText = price != null ? `${fmt(price, token.decimals)} ${token.symbol}` : "price unavailable";
   const low = !!mine.data && price != null && mine.data.balance < price;
 
-  async function submit() {
+  async function submit(quoted: bigint) {
     if (!token || !address) return;
     setPriceNote("");
     try {
@@ -291,6 +301,10 @@ export function Retry({ game, image }: { game: Game | undefined; image: number }
         live = (await d.publicClient.readContract({ address: d.address, abi: d.abi, functionName: "retryPrice" })) as bigint;
       } catch {
         setPriceNote(PRICE_UNAVAILABLE);
+        return;
+      }
+      if (live !== quoted) {
+        setPriceNote(priceChanged(live, token));
         return;
       }
       const liveText = `${fmt(live, token.decimals)} ${token.symbol}`;
@@ -329,7 +343,7 @@ export function Retry({ game, image }: { game: Game | undefined; image: number }
           <button
             className="btn"
             disabled={tx.running || price == null || (gate.isConnected && !gate.wrongChain && (low || !gate.verified))}
-            onClick={() => (!gate.isConnected ? gate.openSheet() : gate.wrongChain ? gate.doSwitch() : submit())}
+            onClick={() => (!gate.isConnected ? gate.openSheet() : gate.wrongChain ? gate.doSwitch() : price != null && submit(price))}
           >
             {tx.running ? "working…" : gate.wrongChain ? `switch to ${d.chain.name}` : `order again · ${priceText}`}
           </button>
@@ -340,7 +354,7 @@ export function Retry({ game, image }: { game: Game | undefined; image: number }
           )}
           {(price == null || priceNote) && (
             <p className="note error" role="status">
-              {PRICE_UNAVAILABLE}
+              {priceNote || PRICE_UNAVAILABLE}
             </p>
           )}
           {low && <p className="note">this wallet holds less than {priceText}.</p>}

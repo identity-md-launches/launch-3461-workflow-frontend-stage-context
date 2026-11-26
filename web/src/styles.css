@@ -396,6 +396,14 @@ main:focus {
 .add .btn {
   flex: 0 0 auto;
 }
+/* payment buttons carry the full-precision live price: let it wrap inside the panel */
+.add-row > .btn,
+.retry > .btn {
+  max-inline-size: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  padding-block: var(--space-2);
+}
 .note {
   font-size: var(--fs-meta);
   color: var(--muted);

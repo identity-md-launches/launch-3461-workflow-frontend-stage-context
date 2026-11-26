@@ -274,7 +274,7 @@ function ImagePage({ n, game }: { n: number; game: Game | undefined }) {
               )}
             </dl>
           )}
-          <Retry game={game} image={n} />
+          <Retry key={n} game={game} image={n} />
           <p className="crumbs">
             {n > 1 && <a href={`#/image/${n - 1}`}>image {n - 1}</a>}
             {n > 1 && n < IMAGES && " · "}

@@ -7,7 +7,7 @@
 // with the deployment ABI, reverts carry the contract's own errors), answers the IPFS gateways
 // with 502, and injects an EIP-6963 "Test Wallet" whose transactions produce receipts with the
 // events the real contracts emit. Scenarios: frames, delivered, price, allowance, decline, retry,
-// sheet, holders, escape. Env: DIST (export dir), PW_DIR (a playwright package dir), WEBKIT=1
+// clickprice, longprice, sheet, holders, escape. Env: DIST (export dir), PW_DIR (a playwright package dir), WEBKIT=1
 // (add WebKit to the frame checks), SHOTS (screenshot dir; default test/scratch/shots).
 import { createRequire } from "node:module";
 import { readFileSync, existsSync, mkdirSync } from "node:fs";
@@ -459,7 +459,100 @@ const scenarios = {
     check("approval exactly the retry price", decodeFunctionData({ abi: erc20Abi, data: W.sent[0].tx.data }).args[1] === 5n * E / 10n);
     check("no page errors", !errors.length, errors.join(" | "));
     await page.screenshot({ path: join(shots, "retry.png"), fullPage: true });
+    const sentBefore = W.sent.length;
+    await page.locator(".crumbs").getByRole("link", { name: "image 2" }).click();
+    await page.getByRole("heading", { name: "image 2" }).waitFor({ timeout: 10000 });
+    await page.waitForTimeout(500);
+    check("image 2: no retry panel carried over from image 1", (await page.locator(".retry").count()) === 0, await page.locator(".retry").allInnerTexts().then((t) => t.join(" | ")));
+    check("image 2: nothing sent for it", W.sent.length === sentBefore);
+    await page.locator(".crumbs").getByRole("link", { name: "image 1" }).click();
+    await page.getByRole("heading", { name: "image 1" }).waitFor({ timeout: 10000 });
+    check("back on image 1: fresh panel, no stale receipt", (await page.locator(".retry").count()) === 0);
     await browser.close();
+  },
+  async clickprice() {
+    // The price moves between the last read and the click: nothing goes to the wallet.
+    for (const [bt, btName] of [[chromium, "chromium"], ...(process.env.WEBKIT ? [[webkit, "webkit"]] : [])]) {
+      const S = baseState();
+      S.onSend = (tx, d) => {
+        if (d.functionName !== "addWord") return;
+        S.images[0].wordCount = 1; S.images[0].words = [d.args[0]]; S.totalSupply = 1; S.hasWord = true; S.owners[1] = ACCT;
+        return [logOf(abi, FIVE, "WordAdded", { image: 1n, slot: 1n, wallet: ACCT, tokenId: 1n, word: d.args[0], paid: S.amountDue })];
+      };
+      const { browser, page, W, errors } = await open(S, { browserType: bt });
+      await page.getByRole("button", { name: "add · 0.1 IMD" }).waitFor();
+      await connect(page);
+      await page.locator("#word").fill("lantern");
+      await page.getByRole("button", { name: "add · 0.1 IMD" }).waitFor();
+      S.amountDue = 2n * E / 10n;
+      await page.getByRole("button", { name: "add · 0.1 IMD" }).click();
+      await page.getByText("the price changed to 0.2 IMD. review the amount and press the button again.").waitFor({ timeout: 15000 }).then(
+        () => check(`${btName} add: price-change note shown`, true),
+        () => check(`${btName} add: price-change note shown`, false),
+      );
+      await page.getByRole("button", { name: "add · 0.2 IMD" }).waitFor({ timeout: 15000 }).then(
+        () => check(`${btName} add: button updated to 0.2 IMD`, true),
+        () => check(`${btName} add: button updated to 0.2 IMD`, false),
+      );
+      check(`${btName} add: zero transactions on the stale click`, W.sent.length === 0, W.sent.map((x) => x.fn).join(","));
+      check(`${btName} add: draft kept`, (await page.locator("#word").inputValue()) === "lantern");
+      await page.getByRole("button", { name: "add · 0.2 IMD" }).click();
+      await page.locator(".result").waitFor({ timeout: 30000 });
+      check(`${btName} add: fresh click approves exactly 0.2 then adds`, W.sent.map((x) => x.fn).join(",") === "approve,addWord" && decodeFunctionData({ abi: erc20Abi, data: W.sent[0].tx.data }).args[1] === 2n * E / 10n, W.sent.map((x) => x.fn).join(","));
+      check(`${btName} add: no page errors`, !errors.length, errors.join(" | "));
+      await browser.close();
+
+      const R = baseState({
+        currentImage: 2, imagesOrdered: 1, totalSupply: 5,
+        images: [img({ status: 2, wordCount: 5, words: ["lantern", "under", "soft", "moss", "arches"], orders: 1, failureStatus: 1, opensAt: now() - 9000 }), img({ opensAt: now() + 3600 }), img(), img(), img()],
+        canRetry: [true, false, false, false, false],
+      });
+      const r = await open(R, { browserType: bt, hash: "#/image/1" });
+      await r.page.locator(".retry").getByRole("button", { name: "order again · 0.5 IMD" }).waitFor({ timeout: 15000 });
+      await connect(r.page);
+      await r.page.locator(".retry").getByRole("button", { name: "order again · 0.5 IMD" }).waitFor();
+      R.retryPrice = 1n * E;
+      await r.page.locator(".retry").getByRole("button", { name: "order again · 0.5 IMD" }).click();
+      await r.page.locator(".retry").getByText("the price changed to 1 IMD. review the amount and press the button again.").waitFor({ timeout: 15000 }).then(
+        () => check(`${btName} retry: price-change note shown`, true),
+        () => check(`${btName} retry: price-change note shown`, false),
+      );
+      await r.page.locator(".retry").getByRole("button", { name: "order again · 1 IMD" }).waitFor({ timeout: 15000 }).then(
+        () => check(`${btName} retry: button updated to 1 IMD`, true),
+        () => check(`${btName} retry: button updated to 1 IMD`, false),
+      );
+      check(`${btName} retry: zero transactions on the stale click`, r.W.sent.length === 0, r.W.sent.map((x) => x.fn).join(","));
+      check(`${btName} retry: no page errors`, !r.errors.length, r.errors.join(" | "));
+      await r.browser.close();
+    }
+  },
+  async longprice() {
+    // Full-precision prices on the payment buttons stay inside the viewport.
+    for (const [bt, btName] of [[chromium, "chromium"], ...(process.env.WEBKIT ? [[webkit, "webkit"]] : [])]) {
+      const S = baseState({ amountDue: 99999999999999999n });
+      const a = await open(S, { browserType: bt, viewport: { width: 320, height: 700 } });
+      const addBtn = a.page.getByRole("button", { name: "add · 0.099999999999999999 IMD" });
+      await addBtn.waitFor({ timeout: 15000 });
+      const box = await addBtn.boundingBox();
+      const sw = await a.page.evaluate(() => document.documentElement.scrollWidth);
+      check(`${btName} 320: add button inside viewport, full label`, box.x + box.width <= 320 && box.height >= 44 && sw <= 320, `right=${(box.x + box.width).toFixed(2)} h=${box.height} scrollWidth=${sw}`);
+      await a.page.screenshot({ path: join(shots, `longprice-add-${btName}.png`) });
+      await a.browser.close();
+
+      const R = baseState({
+        currentImage: 2, imagesOrdered: 1, totalSupply: 5, retryPrice: 499999999999999999n,
+        images: [img({ status: 2, wordCount: 5, words: ["lantern", "under", "soft", "moss", "arches"], orders: 1, failureStatus: 1, opensAt: now() - 9000 }), img({ opensAt: now() + 3600 }), img(), img(), img()],
+        canRetry: [true, false, false, false, false],
+      });
+      const r = await open(R, { browserType: bt, hash: "#/image/1" });
+      const rb = r.page.locator(".retry").getByRole("button", { name: "order again · 0.499999999999999999 IMD" });
+      await rb.waitFor({ timeout: 15000 });
+      const rbox = await rb.boundingBox();
+      const rsw = await r.page.evaluate(() => document.documentElement.scrollWidth);
+      check(`${btName} 390: order again button inside viewport, full label`, rbox.x + rbox.width <= 390 && rbox.height >= 44 && rsw <= 390, `right=${(rbox.x + rbox.width).toFixed(2)} h=${rbox.height} scrollWidth=${rsw}`);
+      await r.page.screenshot({ path: join(shots, `longprice-retry-${btName}.png`) });
+      await r.browser.close();
+    }
   },
   async sheet() {
     const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";

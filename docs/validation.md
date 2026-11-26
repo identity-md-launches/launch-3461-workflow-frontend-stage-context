@@ -41,7 +41,36 @@ The frontend stage of launch `a9881956-4bea-4ae1-885e-94a534f54cdf`. Contract `F
 - Live mainnet reads through the contributor RPC at build time: `currentImage()` = 1,
   `amountDue()` = 0.1 IMD, `totalSupply()` = 0, and code is present (16,509 bytes).
 
-## Revision 2: review findings (this round)
+## Revision 3: review findings (this round)
+
+Three findings were reported. Each was reproduced with new scenarios in `web/tests/mock-rpc.mjs`
+(Chromium 1255 via Playwright 1.64.1), first against the previously accepted export and then
+against the rebuilt one. Old export: the new checks failed as listed below. New export: the full
+mocked suite gives **75 passed, 0 failed**.
+
+| Finding | Reproduced on the old export | Fix | Check on the new export |
+| --- | --- | --- | --- |
+| Add / Order Again could request more than the button quoted (high, `130f5cbf…`) | `clickprice`: with the button showing "add · 0.1 IMD" and `amountDue` moved to 0.2 before the click, the first click sent `approve,addWord` and no note was shown | `AddWord` and `Retry` pass the price on the clicked button to the flow. The click-time read is compared with it. If they differ, nothing goes to the wallet, the note reads "the price changed to {amount} IMD. review the amount and press the button again.", the draft stays, and the refetch puts the new price on the button. The post-approval recheck in `exactApproval` is unchanged (`web/src/Actions.tsx` `addFlow`, `Retry.submit`) | `clickprice`: add and retry both send **zero** transactions on the stale click, show the note and update the button ("add · 0.2 IMD", "order again · 1 IMD"). The draft "lantern" is kept. A fresh click then approves exactly 0.2 and adds. The existing `allowance` scenario still covers a price move after approval |
+| Full-precision prices push payment buttons off the viewport (high, `d16609f7…`) | `longprice`: at 320×700, "add · 0.099999999999999999 IMD" right edge 322.05, scrollWidth 322. At 390×844, "order again · 0.499999999999999999 IMD" right edge 394.06, scrollWidth 394 | `.add-row > .btn, .retry > .btn`: `max-inline-size: 100%`, `white-space: normal`, `overflow-wrap: anywhere`, 8px block padding. The 44px minimum and the full labels are kept (`web/src/styles.css`) | `longprice`: both buttons stay inside the viewport, height ≥ 44, document scrollWidth ≤ the viewport width, full label matched by its accessible name |
+| Image 2 inherited Image 1's retry receipt (medium, `4c4891f6…`) | `retry`: after the image 1 order and refetch, the "image 2" link showed a `.retry` panel with "image 1 is ordered again (attempt 2)." and both links | `<Retry key={n} …>` in `web/src/App.tsx`, so each image page has its own panel state | `retry`: the receipt survives the refetch on image 1. On image 2 there is no retry panel and nothing was sent. Back on image 1 the page shows a fresh state |
+
+WebKit could not launch here (Playwright reported missing `libgtk-4`, `libgraphene`, `libevent`
+and GStreamer libraries). The new scenarios loop over WebKit when `WEBKIT=1` is set, but that run
+did not happen on this machine, so the WebKit results are unverified here.
+
+Re-run this round, on the final export:
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Typecheck | `cd web && npm run typecheck` | passed, no errors |
+| Production build | `cd web && npm run build` | passed. The manifest script printed "1 contract(s), 10 assets", 1,402,196 bytes |
+| Mocked interaction | `cd web && node tests/mock-rpc.mjs` | **75 passed, 0 failed** |
+| Fork interaction | `FORK_URL=<contributor mainnet RPC> ANVIL=anvil node web/tests/interaction.mjs` | **39 passed, 0 failed**, 0 blocked outside requests |
+| Design probe, offline | `IMD_PLAYWRIGHT=… node .imd/reads/skills/design-critic/scripts/taste.mjs --out test/scratch/taste --offline` | **15/16**, the same as the accepted round. Only `type-faces` fails (monospace prose, from the brief) |
+| Design probe, online | the same command without `--offline` | 14/16. `type-faces` as above, plus `eyebrows`: at 390, the frame's "1/5" counter (`web/src/Frame.tsx:48`) sits within 40px above the panel heading "image 1 of 5". It is a data caption under the image, not a kicker. The code is unchanged since the accepted round and no finding names it, so it was left as it is and is recorded here |
+| Manifest re-check | script: file set vs `assets`, SHA-256 of each, `network`/`walletAddChain` byte-equal, contract/address/abiHash and identifiers present in the handoff, key set | passed: 10 files, all hashes match, 9 keys, no `poolKey` (the handoff has none). The ABI files are byte-identical to the accepted round, and the build's manifest script checks their canonical Keccak hash against the handoff |
+
+## Revision 2: review findings
 
 An outside review reported eleven defects. Each was reproduced before it was changed: the new
 mocked-RPC harness `web/tests/mock-rpc.mjs` (Chromium 1255 via Playwright 1.65.1, 390×844 unless
