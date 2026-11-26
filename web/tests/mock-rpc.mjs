@@ -7,7 +7,7 @@
 // with the deployment ABI, reverts carry the contract's own errors), answers the IPFS gateways
 // with 502, and injects an EIP-6963 "Test Wallet" whose transactions produce receipts with the
 // events the real contracts emit. Scenarios: frames, delivered, price, allowance, decline, retry,
-// clickprice, longprice, sheet, holders, escape. Env: DIST (export dir), PW_DIR (a playwright package dir), WEBKIT=1
+// clickprice, longprice, sheet, holders, escape, about. Env: DIST (export dir), PW_DIR (a playwright package dir), WEBKIT=1
 // (add WebKit to the frame checks), SHOTS (screenshot dir; default test/scratch/shots).
 import { createRequire } from "node:module";
 import { readFileSync, existsSync, mkdirSync } from "node:fs";
@@ -129,6 +129,12 @@ function rpc(S, { method, params = [] }) {
     }
     case "eth_getBlockByNumber":
       return { number: toHex(S.block), hash: keccak256(toHex(S.block)), parentHash: Z32, timestamp: toHex(now()), transactions: [], baseFeePerGas: "0x1", gasLimit: "0x1c9c380", gasUsed: "0x0", logsBloom: "0x" + "00".repeat(256), miner: ACCT, nonce: "0x0000000000000000", difficulty: "0x0", extraData: "0x", size: "0x1", stateRoot: Z32, receiptsRoot: Z32, transactionsRoot: Z32, sha3Uncles: Z32, uncles: [], mixHash: Z32 };
+    case "eth_getLogs": {
+      (S.getLogs ??= []).push(params[0]);
+      if (!S.fifthTx) return [];
+      const l = logOf(abi, FIVE, "WordAdded", { image: 1n, slot: 5n, wallet: getAddress(ACCT), tokenId: 5n, word: "arches", paid: E / 10n });
+      return [{ ...l, blockNumber: "0x10", blockHash: keccak256("0x10"), transactionHash: S.fifthTx, transactionIndex: "0x0", logIndex: "0x0", removed: false }];
+    }
     case "eth_estimateGas": return "0x30000";
     case "eth_gasPrice": return "0x1";
     case "eth_maxPriorityFeePerGas": return "0x1";
@@ -189,6 +195,23 @@ async function open(S, { browserType = chromium, viewport = { width: 390, height
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(out) });
     }
     if (/ipfs\.io|dweb\.link/.test(url.host)) return route.fulfill({ status: 502, body: "bad gateway" });
+    // The delivered-image sources. S.net: { gateway, intake, job, api } status codes (default 403 / 404).
+    const net = S.net ?? {};
+    (S.netLog ??= []).push(req.url());
+    const png = () => route.fulfill({ status: 200, contentType: "image/png", headers: { "access-control-allow-origin": "*" }, body: readFileSync(join(root, "web/public/og.png")) });
+    const json = (status, o) => route.fulfill({ status, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(o) });
+    if (url.host === "imd-ipfs.xyz") return (net.gateway ?? 403) === 200 ? png() : route.fulfill({ status: net.gateway ?? 403, contentType: "text/html", body: "<html>are you a robot?</html>" });
+    if (url.host === "api.imd.fun") {
+      if (url.pathname.startsWith("/intake/1/")) {
+        const ok = (net.intake ?? 404) === 200 && url.pathname === `/intake/1/${S.fifthTx}`;
+        return json(ok ? 200 : 404, ok ? { chainId: 1, transactionHash: S.fifthTx, entries: [{ kind: "request", admission: { result: { jobId: "job-1234", kind: "job" } } }] } : { error: "not found" });
+      }
+      if (url.pathname === "/jobs/job-1234/result")
+        return (net.job ?? 404) === 200
+          ? json(200, { jobId: "job-1234", files: [{ name: "notes", url: "https://api.imd.fun/artifacts/notes" }, { name: "print", mediaType: "image/png", url: "https://api.imd.fun/artifacts/printhash" }] })
+          : json(net.job ?? 404, { error: "not found" });
+      if (url.pathname === "/artifacts/printhash") return (net.api ?? 404) === 200 ? png() : route.fulfill({ status: net.api ?? 404, body: "gone" });
+    }
     return route.abort();
   });
   await ctx.exposeFunction("__wallet", async (method, params = []) => {
@@ -305,23 +328,102 @@ const scenarios = {
     }
   },
   async delivered() {
-    const S = baseState({
-      currentImage: 2, imagesOrdered: 1, totalSupply: 5,
-      images: [img({ status: 3, wordCount: 5, words: ["lantern", "under", "soft", "moss", "arches"], orders: 1, opensAt: now() - 9000, orderedAt: now() - 600, uri: "ipfs://bafyresult/1.png" }), img({ opensAt: now() - 10 }), img(), img(), img()],
-      imageURI: ["ipfs://bafyresult/1.png", "", "", "", ""],
-    });
-    const { browser, page } = await open(S, { hash: "#/gallery" });
-    await page.locator(".frame-small").first().getByText("image unavailable").waitFor({ timeout: 15000 });
-    const bad = await framesOk(page);
-    check("gateway 502: words visible in the tile, caption says image unavailable, no notice", !bad.length, bad.join("; "));
-    await page.screenshot({ path: join(shots, "gallery-502.png") });
-    await page.goto(BASE + "#/image/1");
-    await page.getByText("ipfs://bafyresult/1.png").waitFor();
-    check("image page keeps the full result uri in the details", true);
-    await page.locator(".frame .caption").getByText("image unavailable").waitFor({ timeout: 15000 }).then(() => true, () => false).then(async (ok) => {
-      check("image page frame: caption says 'image unavailable', words inside", ok && !(await framesOk(page)).length);
-    });
-    await browser.close();
+    const FIFTH = keccak256(toHex("fifth-word-tx"));
+    const GW = "https://imd-ipfs.xyz/ipfs/bafyresult/artifacts/print.png";
+    const API_IMG = "https://api.imd.fun/artifacts/printhash";
+    const state = (net) =>
+      baseState({
+        currentImage: 2, imagesOrdered: 1, totalSupply: 5, fifthTx: FIFTH, net,
+        images: [img({ status: 3, wordCount: 5, words: ["lantern", "under", "soft", "moss", "arches"], orders: 1, opensAt: now() - 9000, orderedAt: now() - 600, uri: "ipfs://bafyresult/result.json" }), img({ opensAt: now() + 5 * 3600 }), img(), img(), img()],
+        imageURI: ["ipfs://bafyresult/artifacts/print.png", "", "", "", ""],
+      });
+    /** The first frame's picture: its src once it has loaded, or null. */
+    const shown = (page, sel = ".frame") =>
+      page.waitForFunction((sel) => { const i = document.querySelector(`${sel} img.frame-img`); return i && i.complete && i.naturalWidth > 0 ? i.src : null; }, sel, { timeout: 15000 }).then((h) => h.jsonValue(), () => null);
+
+    // 1. The IMD gateway answers: the picture shows on play, in the gallery and on the image page, and the API is not asked.
+    {
+      const S = state({ gateway: 200 });
+      const { browser, page, errors } = await open(S);
+      check("gateway: play (/) shows image 1 from imd-ipfs.xyz/ipfs/<CID>/artifacts/print.png", (await shown(page)) === GW);
+      await page.screenshot({ path: join(shots, "play-delivered-390.png") });
+      await page.goto(BASE + "#/gallery");
+      check("gateway: the gallery tile of image 1 shows the picture", (await shown(page, ".tile .frame")) === GW);
+      check("gateway: the other gallery tiles keep their sentences", (await page.locator(".tile img").count()) === 1);
+      await page.goto(BASE + "#/image/1");
+      check("gateway: /#/image/1 shows the picture", (await shown(page)) === GW);
+      check("gateway: the full result uri stays in the details", await page.getByText("ipfs://bafyresult/result.json").waitFor().then(() => true, () => false));
+      check("gateway: the alt text carries the five words", (await page.locator("img.frame-img").getAttribute("alt")) === "image 1: lantern under soft moss arches");
+      check("gateway: the IMD API was not asked", !S.netLog.some((u) => u.includes("api.imd.fun")), S.netLog.filter((u) => u.includes("api.imd.fun")).join(" "));
+      check("gateway: ipfs.io and dweb.link are never asked", !S.netLog.some((u) => /ipfs\.io|dweb\.link/.test(u)));
+      check("gateway: no page errors", !errors.length, errors.join(" | "));
+      await browser.close();
+    }
+    // 2. The gateway answers 403 (bot check): the API's intake record, then the job result's "print" file.
+    {
+      const S = state({ gateway: 403, intake: 200, job: 200, api: 200 });
+      const { browser, page, errors } = await open(S, { hash: "#/image/1" });
+      check("api fallback: /#/image/1 shows the job result's print url", (await shown(page)) === API_IMG);
+      const intakeAsked = S.netLog.some((u) => u === `https://api.imd.fun/intake/1/${FIFTH}`);
+      check("api fallback: asked /intake/1/<fifth word's tx hash>", intakeAsked);
+      check("api fallback: asked /jobs/<entries[0].admission.result.jobId>/result", S.netLog.includes("https://api.imd.fun/jobs/job-1234/result"));
+      const [ev] = abi.filter((x) => x.type === "event" && x.name === "WordAdded");
+      const topics = encodeEventTopics({ abi: [ev], eventName: "WordAdded", args: { image: 1n, slot: 5n } });
+      const q = (S.getLogs ?? [])[0];
+      check("api fallback: the fifth word is looked up as WordAdded(image 1, slot 5) on FiveWords", !!q && q.address?.toLowerCase() === FIVE && q.topics?.[0] === topics[0] && q.topics?.[1] === topics[1] && q.topics?.[2] === topics[2], JSON.stringify(q));
+      await page.goto(BASE + "#/gallery");
+      check("api fallback: the gallery tile shows it too", (await shown(page, ".tile .frame")) === API_IMG);
+      await page.goto(BASE + "#/");
+      check("api fallback: play (/) shows it too", (await shown(page)) === API_IMG);
+      check("api fallback: no page errors", !errors.length, errors.join(" | "));
+      await browser.close();
+    }
+    // 3. Both fail: the sentence stays with "image unavailable", and the next refresh tries again.
+    for (const [tag, net] of [["intake 404", { gateway: 403, intake: 404 }], ["print url 404", { gateway: 403, intake: 200, job: 200, api: 404 }]]) {
+      const S = state(net);
+      const { browser, page } = await open(S, { hash: "#/gallery" });
+      const ok = await page.locator(".frame-small").first().getByText("image unavailable").waitFor({ timeout: 15000 }).then(() => true, () => false);
+      const bad = await framesOk(page);
+      if (process.env.DEBUG) console.log("DEBUG tile:", JSON.stringify(await page.locator(".tile").first().innerText()), S.netLog.filter((u) => !u.includes("fivewords.test")));
+      check(`both fail (${tag}): words visible in the tile, caption says image unavailable`, ok && !bad.length && (await page.locator(".tile").first().getByText("lantern").isVisible()), bad.join("; "));
+      if (tag === "intake 404") {
+        await page.screenshot({ path: join(shots, "gallery-unavailable.png") });
+        await page.goto(BASE + "#/image/1");
+        const ok2 = await page.locator(".frame .caption").getByText("image unavailable").waitFor({ timeout: 15000 }).then(() => true, () => false);
+        check("both fail: image page frame says 'image unavailable', words inside", ok2 && !(await framesOk(page)).length);
+        const before = S.netLog.filter((u) => u.startsWith("https://imd-ipfs.xyz/")).length;
+        S.net.gateway = 200;
+        check("both fail: the next refresh tries the gateway again and shows the picture", (await shown(page)) === GW);
+        check("both fail: the retry asked the gateway again", S.netLog.filter((u) => u.startsWith("https://imd-ipfs.xyz/")).length > before);
+      }
+      await browser.close();
+    }
+  },
+  async about() {
+    for (const vp of [{ width: 390, height: 844 }, { width: 320, height: 700 }, { width: 1440, height: 900 }]) {
+      const { browser, page, errors } = await open(baseState(), { viewport: vp, hash: "#/about" });
+      if (process.env.DEBUG) { await page.waitForTimeout(3000); console.log("DEBUG about:", (await page.locator("main").innerText()).slice(0, 2000)); }
+      await page.getByRole("heading", { name: "how this was built" }).waitFor();
+      const href = (name) => page.locator(".prose").getByRole("link", { name, exact: true }).getAttribute("href").catch(() => null);
+      if (vp.width === 390) {
+        check("about: only 'what will you build?' links to explorer.imd.fun/launch", (await href("what will you build?")) === "https://explorer.imd.fun/launch");
+        const p = page.locator(".prose p", { hasText: "this is just a tiny five word example." });
+        check("about: the rest of that sentence is plain text", (await p.locator("a").count()) === 1 && (await p.locator("a").innerText()) === "what will you build?");
+        check("about: 'imd swarm' links to https://imd.fun", (await href("imd swarm")) === "https://imd.fun");
+        const addr = "0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7";
+        check("about: IMD address shown and linked to Etherscan", (await href(addr)) === `https://etherscan.io/token/${addr}`);
+        const order = await page.locator(".prose h2").allInnerTexts();
+        check("about: 'how this was built' is the last section", order.at(-1) === "how this was built", order.join(","));
+        const last = await page.locator(".prose > :last-child").innerText();
+        check("about: its sentence", last === "built by a distributed swarm of agents (imd). see the prompt and job breakdown.", last);
+        check("about: 'prompt and job breakdown' links to the job", (await href("prompt and job breakdown")) === "https://explorer.imd.fun/jobs/7c1baf52-c412-4eff-9dc7-612016bac5d8");
+        await page.screenshot({ path: join(shots, "about-390.png"), fullPage: true });
+      }
+      const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      check(`about: no sideways scroll at ${vp.width}`, over <= 0, String(over));
+      check(`about: no page errors at ${vp.width}`, !errors.length, errors.join(" | "));
+      await browser.close();
+    }
   },
   async price() {
     const S = baseState({ amountDueFail: Infinity });

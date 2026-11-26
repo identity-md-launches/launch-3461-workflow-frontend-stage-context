@@ -24,8 +24,9 @@ names (`dist/abi/FiveWords.json`). Nothing else holds an address, chain id, ABI 
   It then lists every exported file except itself with its SHA-256 hash.
 - `web/src/config.ts` loads the manifest and ABI, builds the viem chain (`network.rpcUrls` with
   fallback, `network.explorer`), the read client and the wagmi config. It also holds the site's own
-  public constants: name, description, IPFS gateways for delivered images, OpenSea, the
-  explorer.imd.fun launch link and the Uniswap link on the about page. There are no keys, private
+  public constants: name, description, the sources of delivered images (`IMD_IPFS_GATEWAY`
+  `https://imd-ipfs.xyz/ipfs/` and `IMD_API` `https://api.imd.fun`), OpenSea, imd.fun, the
+  explorer.imd.fun launch and build-job links and the Uniswap link on the about page. There are no keys, private
   RPCs or WalletConnect project IDs.
 
 Wallets: browser extensions by EIP-6963, phones by opening the page in the wallet's own browser
@@ -63,12 +64,24 @@ FORK_URL=https://ethereum-rpc.publicnode.com ANVIL=anvil node tests/interaction.
 
 `web/tests/mock-rpc.mjs` needs no chain: it serves the built export in Chromium, answers the RPC
 URLs from an in-memory contract state decoded with the deployment ABI, and drives a scripted wallet
-through the frame layout, price, exact-approval, decline, retry, connect-sheet, holder and keyboard
-scenarios. It needs only Playwright with a Chromium build:
+through the frame layout, delivered-image sources (gateway, API fallback, both failing and the
+retry on refresh), about page, price, exact-approval, decline, retry, connect-sheet, holder and
+keyboard scenarios. It needs only Playwright with a Chromium build:
 
 ```
-npm run build && npm run test:mock          # or: node tests/mock-rpc.mjs retry decline
+npm run build && npm run test:mock          # or: node tests/mock-rpc.mjs delivered about
 ```
+
+## Delivered images
+
+`src/image-source.ts` and `src/Frame.tsx`. A delivered image loads from
+`https://imd-ipfs.xyz/ipfs/<CID>/artifacts/print.png` (the CID of the image's onchain URI). If that
+fails, the site finds the fifth word's transaction (the `WordAdded` log of slot 5, looked up in the
+block whose timestamp is the image's `orderedAt`), reads `entries[0].admission.result.jobId` from
+`GET https://api.imd.fun/intake/1/<tx hash>`, then shows the `url` of the file named "print" from
+`GET https://api.imd.fun/jobs/<job id>/result`. If both fail the frame keeps the sentence with
+"image unavailable" and tries again on the next refresh of the contract read (every 12 seconds).
+The site no longer uses ipfs.io or dweb.link: both answer image requests with a bot check (403).
 
 Results, the design review and what was not tested are in `docs/validation.md`. The design
-system is described in `docs/DESIGN.md`.
+system is described in `DESIGN.md` at the repository root.

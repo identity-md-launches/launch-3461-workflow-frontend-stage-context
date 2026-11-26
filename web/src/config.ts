@@ -15,8 +15,18 @@ export const SITE_NAME = "fivewords";
 export const SITE_DESCRIPTION =
   "five strangers write one image prompt, one word each, and the imd swarm draws it. five images, then it ends.";
 
-/** Public IPFS gateways, tried in order, for result images stored as ipfs:// URIs. */
-export const IPFS_GATEWAYS = ["https://ipfs.io/ipfs/", "https://dweb.link/ipfs/"];
+/**
+ * Where a delivered image is loaded from, in order. First the IMD IPFS gateway, at
+ * `<gateway><CID>/artifacts/print.png`. If that fails, the IMD API: the intake record of the
+ * fifth word's transaction names the job, and the job's result lists its files; the one named
+ * "print" has the image URL. (ipfs.io and dweb.link answer image requests with a bot check.)
+ */
+export const IMD_IPFS_GATEWAY = "https://imd-ipfs.xyz/ipfs/";
+export const IMD_API = "https://api.imd.fun";
+/** The IMD swarm's home, linked from the about page. */
+export const IMD_SITE = "https://imd.fun";
+/** The prompt and job breakdown of the job that built this site. */
+export const BUILD_JOB = "https://explorer.imd.fun/jobs/7c1baf52-c412-4eff-9dc7-612016bac5d8";
 /** OpenSea, for token and holder links. */
 export const OPENSEA = "https://opensea.io";
 /** The IMD launch explorer the about page links to. */

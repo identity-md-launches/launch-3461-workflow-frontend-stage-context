@@ -22,9 +22,9 @@ The frontend stage of launch `a9881956-4bea-4ae1-885e-94a534f54cdf`. Contract `F
   not a swap built into the site.
 - Inferred choices: all copy is lowercase (the brief asks for a lowercase about page, and the rest
   follows it for one voice), the headline is "five words, one image", and the delivered image is
-  shown through public IPFS gateways (`ipfs.io`, then `dweb.link`).
-- `DESIGN.md` is at `docs/DESIGN.md`, not the repository root. The assignment's write scope is
-  `web/**`, `dist/**` and `docs/**`, and a root file would be outside it.
+  loaded from `https://imd-ipfs.xyz/ipfs/<CID>/artifacts/print.png`, then from the IMD API (revision 4).
+- `DESIGN.md` is at the repository root (moved from `docs/DESIGN.md` in revision 4, when the write
+  scope allowed it).
 
 ## Deployment binding
 
@@ -41,7 +41,68 @@ The frontend stage of launch `a9881956-4bea-4ae1-885e-94a534f54cdf`. Contract `F
 - Live mainnet reads through the contributor RPC at build time: `currentImage()` = 1,
   `amountDue()` = 0.1 IMD, `totalSupply()` = 0, and code is present (16,509 bytes).
 
-## Revision 3: review findings (this round)
+## Revision 4: delivered images and the about page (this round)
+
+### What changed
+
+| Request | Change | Source |
+| --- | --- | --- |
+| Images showed "image unavailable": ipfs.io and dweb.link answer image requests with a bot check (403) | A delivered image loads from `https://imd-ipfs.xyz/ipfs/<CID>/artifacts/print.png` first. On error the site finds the fifth word's transaction (`WordAdded` with `image`, `slot = 5`, looked up in the block whose timestamp is the image's `orderedAt`, found by stepping 12-second slots from the latest block), reads `entries[0].admission.result.jobId` from `GET https://api.imd.fun/intake/1/<tx>`, then shows the `url` of the file named `print` from `GET https://api.imd.fun/jobs/<id>/result`. If both fail, the sentence stays with "image unavailable" and the next contract refresh (12 s) starts again from the gateway. ipfs.io and dweb.link are no longer used | `web/src/image-source.ts`, `web/src/Frame.tsx`, `web/src/config.ts` (`IMD_IPFS_GATEWAY`, `IMD_API`), `web/src/game.ts` (`readAt` per image) |
+| About: only "what will you build?" is a link | The sentence "this is just a tiny five word example." is plain text, then the link to `https://explorer.imd.fun/launch` | `web/src/App.tsx` `About` |
+| About: link "imd swarm" to https://imd.fun | Linked. The about page's first line, "a mini experiment in multiplayer ai.", does not contain "imd swarm"; the first paragraph that does is the next one, and that is where the link is | `web/src/App.tsx` `About`, `IMD_SITE` in `config.ts` |
+| About: IMD address under "where to get imd" | "imd address: 0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7", linked to `https://etherscan.io/token/<address>`. The address comes from the manifest's `network.pairToken` (the same value as the deployment's `imd_` constructor argument), the explorer from `network.explorer`; nothing new is hard-coded | `web/src/App.tsx` `About` |
+| About: last section "how this was built" | `h2` "how this was built" and "built by a distributed swarm of agents (imd). see the prompt and job breakdown.", with "prompt and job breakdown" linked to `https://explorer.imd.fun/jobs/7c1baf52-c412-4eff-9dc7-612016bac5d8` | `web/src/App.tsx` `About`, `BUILD_JOB` in `config.ts` |
+
+Live state when this was built: `currentImage()` = 2, image 1 delivered with result
+`ipfs://bafybeigmq6qhme4m27uvg5n5fque46p3yba7bicszaynpapaytuqaylqae/result.json`, the words
+"slifer parade everlight garden candlelight", fifth word in transaction
+`0xaccac19952629dd05c2a90a7a35b9b22959bc7dba025ddd84fea4e60e78d00c5` (block 26500324). Image 2 opens
+at unix 1795725551. Until then `/` shows image 1, as before: between rounds the play page shows the
+image just ordered. Once image 2 opens, `/` shows image 2's frame for writing, and image 1 stays in
+the gallery and on `/#/image/1`. That rule predates this revision and was kept.
+
+### Checks run on the final export
+
+Chromium 156 headless shell (Playwright 1.64.1). Its missing system libraries and fonts were
+unpacked from Ubuntu 24.04 packages into `test/scratch/` and loaded with `LD_LIBRARY_PATH` and a
+local fontconfig file. Nothing was installed system-wide.
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Typecheck | `cd web && npm run typecheck` | passed, no errors |
+| Production build | `cd web && npm run build` | passed. Manifest script: "1 contract(s), 10 assets", 1,405,255 bytes |
+| Mocked interaction, full suite | `cd web && node tests/mock-rpc.mjs` | **106 passed, 0 failed**. This includes the new `delivered` scenarios: gateway 200 (picture on `/`, the gallery tile and `/#/image/1`, the API not asked, ipfs.io/dweb.link never asked, alt text has the five words). Gateway 403 with the API answering (the `WordAdded(image 1, slot 5)` log query on FiveWords, `/intake/1/<that tx>`, `/jobs/job-1234/result`, the `print` URL shown on all three pages). Both failing, once with the intake answering 404 and once with the print URL answering 404 ("image unavailable", the words inside the frame). Recovery: the gateway turns to 200 and the next refresh shows the picture. The new `about` scenario covers every link and text above, the section order, and no sideways scroll and no page errors at 320, 390 and 1440 |
+| Live network, gateway | the export served at a fake origin in Chromium, real RPC and real hosts | image 1 loaded from `https://imd-ipfs.xyz/ipfs/bafybeigmq…/artifacts/print.png` (naturalWidth 1254) on `/`, `/#/gallery` and `/#/image/1`. Once loaded, the picture has no `loading` class, opacity 1, and the sentence is removed |
+| Live network, API fallback | the same, with `imd-ipfs.xyz` answered 403 | the site asked `api.imd.fun/intake/1/0xaccac199…d00c5`, then `/jobs/c9eff464-dbfe-46cb-834c-c94102f021b3/result`, then showed `https://api.imd.fun/artifacts/7b7dd4c9…10bc` in the frame of `/#/image/1`. The block lookup found the exact block |
+| Design probe | `IMD_PLAYWRIGHT=web/node_modules/playwright/index.mjs node .imd/reads/skills/design-critic/scripts/taste.mjs --out test/scratch/taste` | **15/16**. Before the fix below it was 14/16, with `eyebrows` failing. Now only `type-faces` fails (monospace prose, from the brief's "black monospace"). The 390 screenshot shows the headline, the lede, image 1 from the live gateway, "image 1 of 5", the countdown and the word input with "add · 0.1 IMD" on the first screen |
+| Fork interaction | `web/tests/interaction.mjs` | **not run this round**: it needs Foundry's `anvil`, which is not on this machine. Its about-page link check was updated to the new link text ("what will you build?") |
+
+WebKit was not run (as in revision 3). No screen reader, no physical phone and no native 200% zoom
+were used.
+
+### Better Interface review of the changed surfaces
+
+Scope: the frame on `/`, `/#/gallery` and `/#/image/n`, and the about page. The rest of the site is
+unchanged since revision 3 and was not reviewed again.
+
+| Domain | Coverage | Notes |
+| --- | --- | --- |
+| Accessibility | Checked | The picture has alt text "image n: <five words>". While it loads it is `aria-hidden` and the sentence (with its `aria-label`) is still the frame's text. New links are native `<a>` with visible names and the existing focus ring. The status caption is text, not colour. Screen reader: not verified |
+| Layout | Checked | The 42-character address wraps with `.break` at 320 (no sideways scroll, measured). The "how this was built" section follows the existing `.prose` rhythm. The stage gap changed, see finding 1 |
+| Writing | Checked | The brief's sentences are used verbatim, in lowercase. Link text names its destination ("imd swarm", "prompt and job breakdown"). "image unavailable" was kept as the brief asks |
+| Typography | Checked | No new sizes or weights. The probe's `type-sizes` and `tracking` pass |
+| Colors | Checked | No new colours. The probe's `contrast` check passes at 320, 390 and 1440. Text over the picture: none (the caption is its own white row) |
+| UI | Checked | Loading, failed and retried states of the picture, see finding 2. No motion was added |
+
+| # | Severity | Finding | Fix | Recheck |
+| --- | --- | --- | --- | --- |
+| 1 | Medium | `web/src/styles.css:220` `.stage` had a 16px gap under 820px, so at 390 the frame's "1/5" caption (`web/src/Frame.tsx` caption) sat within 40px above the panel heading "image 1 of 5" and read as a kicker label (probe `eyebrows`, first screen) | The `.stage` gap is 40px (`--space-6`) at every width, the value desktop already used | Probe `eyebrows` passes. The 390 first screen still shows the word form and its button |
+| 2 | Medium | `web/src/Frame.tsx`: a delivered image (3.8 MB print) showed an empty white square until it finished downloading, with no words and no picture | The picture and the sentence share the frame's first row. The picture is hidden (`.frame-img.loading`, `styles.css:311`) until `onLoad`, and the sentence stays until then | Live: loaded picture visible (opacity 1), sentence removed. Mocked: frames-inside checks pass in all states |
+
+Completion: complete for the stated scope. The limitations are the ones listed above: the fork
+interaction test, WebKit, screen reader and physical devices were not run.
+
+## Revision 3: review findings
 
 Three findings were reported. Each was reproduced with new scenarios in `web/tests/mock-rpc.mjs`
 (Chromium 1255 via Playwright 1.64.1), first against the previously accepted export and then

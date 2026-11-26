@@ -293,7 +293,7 @@ try {
 
   await page.getByRole("link", { name: "about" }).click();
   await page.getByText("a mini experiment in multiplayer ai.").waitFor();
-  check("about links the launch explorer", (await page.getByRole("link", { name: "this is just a tiny five word example. what will you build?" }).getAttribute("href")) === "https://explorer.imd.fun/launch");
+  check("about links the launch explorer", (await page.getByRole("link", { name: "what will you build?", exact: true }).getAttribute("href")) === "https://explorer.imd.fun/launch");
   check("footer on every page", await page.getByText("experimental, unaudited software. use at your own risk.").isVisible());
   for (const w of [320, 390]) {
     await page.setViewportSize({ width: w, height: 700 });

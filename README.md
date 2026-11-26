@@ -9,6 +9,23 @@ This repository is the contract stage of the launch: the contract, its tests, it
 (`docs/abi/FiveWords.json`) and this document. It deploys nothing and writes no `launch.json`; the
 manifest, the independent security review, the deployment and the website are later steps.
 
+## Website
+
+The site for this contract is in `web/` (Vite, React, TypeScript), and its built static export is
+committed at `dist/` (relative asset URLs, hash routes). Install, preview and rebuild it from `web/`:
+
+```
+cd web
+npm ci              # install from package-lock.json
+npm run typecheck   # tsc, no emit
+npm run build       # rebuild ../dist and dist/imd-deployment.json
+npm run preview     # serve ../dist at http://localhost:4173
+npm run test:mock   # browser checks of the export against a mocked RPC (needs Playwright Chromium)
+```
+
+`web/README.md` explains the configuration and tests, `DESIGN.md` the design system, and
+`docs/validation.md` what was checked and what was not.
+
 ## Layout
 
 | Path | What |

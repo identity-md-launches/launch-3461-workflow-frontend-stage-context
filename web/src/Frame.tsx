@@ -1,34 +1,77 @@
-import { useEffect, useState } from "react";
-import { gatewayUrl, IMAGES, WORDS, type ImageInfo } from "./game";
-import { IPFS_GATEWAYS } from "./config";
+import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { IMAGES, WORDS, type ImageInfo } from "./game";
+import { useDeployment } from "./deployment";
+import { apiImageUrl, gatewayImageUrl } from "./image-source";
+
+type Stage = "gateway" | "api" | "failed";
 
 /**
  * One white frame per image. Until the image arrives the sentence builds inside it, word by word,
  * as plain text; once delivered the frame shows the picture instead. The sentence (or picture)
- * and the caption are separate rows, so the caption never covers words. When no gateway serves a
- * delivered picture the sentence stays and the caption says "image unavailable"; the full result
- * URI is on the image's page.
+ * and the caption are separate rows, so the caption never covers words.
+ *
+ * A delivered picture loads from the IMD IPFS gateway first, then from the URL the IMD API gives
+ * (`image-source.ts`). When both fail the sentence stays, the caption says "image unavailable",
+ * and the next game refresh (every 12 seconds) tries again from the gateway. The full result URI
+ * is on the image's page.
  */
 export function Frame({ image, size = "large" }: { image: ImageInfo; size?: "large" | "small" }) {
-  const [gw, setGw] = useState(0);
-  const [failed, setFailed] = useState(false);
-  const delivered = image.status === "delivered" && image.imageURI;
+  const d = useDeployment();
+  const delivered = image.status === "delivered";
+  const gateway = delivered ? gatewayImageUrl(image) : null;
+  const [stage, setStage] = useState<Stage>(gateway ? "gateway" : "api");
+  const [attempt, setAttempt] = useState(0);
   const phrase = image.words.slice(0, image.wordCount).join(" ");
+
+  // A new result URI starts over from the gateway.
   useEffect(() => {
-    setGw(0);
-    setFailed(false);
-  }, [image.imageURI]);
+    setStage(gateway ? "gateway" : "api");
+  }, [gateway]);
+
+  // Both sources failed: try again on the next refresh of the game read.
+  const lastRead = useRef(image.readAt);
+  useEffect(() => {
+    if (image.readAt === lastRead.current) return;
+    lastRead.current = image.readAt;
+    if (stage === "failed") {
+      setAttempt((a) => a + 1);
+      setStage(gateway ? "gateway" : "api");
+    }
+  }, [image.readAt, stage, gateway]);
+
+  const api = useQuery({
+    queryKey: ["api-image", d.address, image.n, image.uri, attempt],
+    enabled: delivered && stage === "api",
+    retry: false,
+    staleTime: Infinity,
+    queryFn: () => apiImageUrl(d, image),
+  });
+  useEffect(() => {
+    if (stage === "api" && api.isError) setStage("failed");
+  }, [stage, api.isError]);
+
+  const src = !delivered ? null : stage === "gateway" ? gateway : stage === "api" ? (api.data ?? null) : null;
+  const failed = delivered && stage === "failed";
+  // The sentence stays in the frame until the picture has finished loading (prints are megabytes).
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+  const loaded = !!src && loadedSrc === src;
 
   return (
     <figure className={`frame frame-${size}`}>
-      {delivered && !failed ? (
+      {src && (
         <img
-          className="frame-img"
-          src={gatewayUrl(image.imageURI, gw)}
+          key={`${attempt}-${stage}`}
+          className={loaded ? "frame-img" : "frame-img loading"}
+          src={src}
           alt={`image ${image.n}: ${phrase}`}
-          onError={() => (gw + 1 < IPFS_GATEWAYS.length ? setGw(gw + 1) : setFailed(true))}
+          aria-hidden={loaded ? undefined : true}
+          decoding="async"
+          onLoad={() => setLoadedSrc(src)}
+          onError={() => setStage(stage === "gateway" ? "api" : "failed")}
         />
-      ) : (
+      )}
+      {!loaded && (
         <p className="sentence" aria-label={image.wordCount ? `the words so far: ${phrase}` : "no words yet"}>
           {Array.from({ length: WORDS }, (_, i) =>
             i < image.wordCount ? (
@@ -47,7 +90,7 @@ export function Frame({ image, size = "large" }: { image: ImageInfo; size?: "lar
         <span>
           {image.n}/{IMAGES}
         </span>
-        <span>{delivered && failed ? "image unavailable" : size === "small" ? shortStatus(image) : statusLine(image)}</span>
+        <span>{failed ? "image unavailable" : size === "small" ? shortStatus(image) : statusLine(image)}</span>
       </figcaption>
     </figure>
   );

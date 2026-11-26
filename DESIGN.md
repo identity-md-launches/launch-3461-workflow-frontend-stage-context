@@ -1,7 +1,7 @@
 # fivewords design system
 
-This file belongs at the repository root. This assignment can write only `web/**`, `dist/**` and
-`docs/**`, so it is here instead. Everything below comes from the final source in `web/src/`.
+Everything below comes from the final source in `web/src/` (styles in `web/src/styles.css`). It
+was moved here from `docs/DESIGN.md` in the image-source and about-page revision.
 
 ## Overview
 
@@ -59,14 +59,18 @@ were not measured one by one.
   not read as a label over the headline) and 16px at the sides.
 - Header (`.top`): the logo at the left edge, the page links, then the wallet control at the right
   edge. Under 560px the page links drop to their own row (`styles.css:142`).
-- `.stage` is the frame-plus-panel layout used on the play page and the image pages. It is one
-  column under 820px and two columns from 820px (`1.15fr` frame, `1fr` panel, 40px gap,
-  `styles.css:240`). Under 820px (`styles.css:227`) the panel shows its heading, countdown and word
-  form before the slot list, so the main action stays on the first phone screen.
+- `.stage` is the frame-plus-panel layout used on the play page and the image pages
+  (`styles.css:220`). It has a 40px gap (`--space-6`) at every width. It is one column under 820px
+  and two columns from 820px (`1.15fr` frame, `1fr` panel, `styles.css:242`). Under 820px
+  (`styles.css:229`) the panel shows its heading, countdown and word form before the slot list, so
+  the main action stays on the first phone screen. The 40px gap also keeps the frame's `1/5`
+  caption from reading as a label over the panel heading below it on phones.
 - The gallery grid (`.grid`) is `repeat(auto-fit, minmax(168px, 1fr))` with an 8px gap: one
   column at 320, two at 390, and the five tiles share the row at 1440.
 - The payment buttons wrap their full-precision price inside the panel rather than widen the page.
-- No horizontal scrolling at 320, 390 or 1440, measured by the interaction test and the probe.
+- Long unbroken strings in prose (the IMD address on the about page) use `.break`
+  (`overflow-wrap: anywhere`, `styles.css:556`) and wrap inside the 320px column.
+- No horizontal scrolling at 320, 390 or 1440, measured by the interaction tests and the probe.
 
 ## Elevation & Depth
 
@@ -79,21 +83,23 @@ backdrop, `z-index: 20`). The connect sheet is a bottom sheet under 640px and ce
 Square corners everywhere (`border-radius: 0`). Outlines are 2px (`--line`) on frames, slot lists,
 buttons, inputs, menus, the sheet and result boxes. Lighter 1px black rules separate slot rows, sheet
 rows, step numbers and the sheet's × button. The frame is a 1:1 square (`aspect-ratio`), and the
-large frame is capped at 64vh. Inside, the frame is a two-row grid: the sentence (or the picture)
-fills the first row and the caption is the second, so the caption never covers words.
+large frame is capped at 64vh. Inside, the frame is a two-row grid: the sentence and the picture
+share the first row (`grid-row: 1; grid-column: 1`) and the caption is the second, so the caption
+never covers words.
 
 ## Components
 
 | Component | Source | Use and states |
 | --- | --- | --- |
 | Button `.btn` / `.btn-primary` | `styles.css` (`.btn`), used across `src/` | 44px minimum height. Quiet buttons are white with a black outline; hover `--hover`, pressed `--press`, disabled has grey text and border. Use `.btn-primary` (black fill) for exactly one action per view: "add · 0.1 IMD". Focus shows a 2px `--ink` ring offset 2px (`:focus-visible`, `styles.css:81`). Buttons do not wrap (`nowrap`), except the two payment buttons ("add · …" in `.add-row`, "order again · …" in `.retry`): they carry the full-precision live price, so they are capped at the panel width (`max-inline-size: 100%`), wrap (`white-space: normal`, `overflow-wrap: anywhere`) and get 8px block padding, keeping the 44px minimum. |
-| Frame | `src/Frame.tsx` `Frame` | `size="large"` (play page, image page) or `"small"` (gallery). Words are plain text and `____` stands for open slots. When the image is delivered the frame flips to the picture from `imageURI` through `IPFS_GATEWAYS`, trying the next gateway on error. If every gateway fails the sentence stays and the caption says "image unavailable"; the full result URI is in the image page's details. The caption shows `n/5` and the status line (a short form in gallery tiles: "ordered", "order failed", "3 of 5 words"). `FramePlaceholder` in `App.tsx` keeps the same shape while loading. |
+| Frame | `src/Frame.tsx` `Frame` | `size="large"` (play page, image page) or `"small"` (gallery). Words are plain text and `____` stands for open slots. When the image is delivered the frame loads the picture (`src/image-source.ts`): first `https://imd-ipfs.xyz/ipfs/<CID>/artifacts/print.png` (CID from the onchain URI), then, on error, the IMD API (`/intake/1/<fifth word's tx>` gives `entries[0].admission.result.jobId`, `/jobs/<id>/result` gives the `url` of the file named "print"). The picture loads hidden (`opacity: 0`, `.frame-img.loading`, `styles.css:311`, and `aria-hidden`) while the sentence stays in the frame until `onLoad`, then the picture replaces it, so a multi-megabyte print never shows as an empty square. If both sources fail the sentence stays, the caption says "image unavailable", and the next game refresh (12 s) tries again from the gateway. The full result URI is in the image page's details. The caption shows `n/5` and the status line (a short form in gallery tiles: "ordered", "order failed", "3 of 5 words"). `FramePlaceholder` in `App.tsx` keeps the same shape while loading. |
 | Slot list `.slots` | `App.tsx` (`Play`, `ImagePage`) | Five numbered rows. A filled row is `--ink`; an open row is `--faint` "open". On the image page each row also shows `.slot-meta` (the NFT and its holder, linked to OpenSea). |
 | Word form | `src/Actions.tsx` `AddWord` | A labelled input (16px) and the primary button. The help text sits under the input and turns into the error text (`role="alert"`) when the word is invalid. One blocker line says why the button is disabled. Before the first prompt it says "two wallet prompts: approve exactly …". Disconnected, the button opens the connect sheet; on the wrong chain it reads "switch to Ethereum". If the price read fails the button reads "add · price unavailable", disabled, with "the image price is unavailable. try again after the next refresh." The click reads `amountDue()` again; if it differs from the price on the button, nothing goes to the wallet, the button updates, the draft stays and the note reads "the price changed to {amount} IMD. review the amount and press the button again." The draft is cleared only when a receipt shows `WordAdded`; after a decline or a failure the word stays and focus returns to the input. |
 | Steps `.steps` | `Actions.tsx` `Steps` | The numbered steps of a transaction flow, each `todo`, `wait`, `sign`, `mining`, `done` or `error`, with a note and a "view transaction" explorer link. `aria-live="polite"`. A `.result` box under the steps gives what the receipt shows. |
 | Retry | `Actions.tsx` `Retry` | Appears when `canRetry(image)` is true: a quiet button "order again · {price}" with the same exact-approve-then-call steps, the same click-time price check against the button, and its switch error under it. The panel is keyed by image number, so its steps and receipt stay with that image and do not follow the visitor to another image page. Once the order goes through, the button and its note go, and the steps, links and result stay. |
 | Inline action `.linkbtn` | `styles.css` | A button styled as underlined text for an action inside a line, such as "holder unavailable · retry" on the image page. |
 | Wallet control and connect sheet | `src/wallet/ConnectSheet.tsx` | "connect" opens the sheet: wallets announced by EIP-6963 (on any device), a generic "browser wallet" row only when `window.ethereum` exists and nothing announced itself, then Coinbase Wallet. On a phone with no wallet in the page, the "open in …" rows come first ("get Rabby" goes to rabby.io, as Rabby has no page link). On a desktop with none, a note says no browser wallet was found. Rows are 48px with 28px marks (`wallet-icons.ts`). The sheet closes on Escape, the backdrop or ×, keeps focus inside, and returns focus when it closes. Connected, the control shows the short address and opens a menu with the full address and "disconnect"; Escape closes the menu and returns focus to the address button. |
+| About page | `App.tsx` `About` | `.prose` (64ch measure): h1, short paragraphs, lists, and four `h2` sections ending with "how this was built". Inline links only (underlined, `--ink`): "imd swarm" (imd.fun), "what will you build?" (the launch explorer; the sentence before it is plain text), the uniswap link, the IMD token address in full with `.break`, linked to `{explorer}/token/{address}`, and "prompt and job breakdown" (the job on explorer.imd.fun). All open in a new tab. |
 | Notes, banner, facts | `styles.css` `.note`, `.banner`, `.facts` | `.note` is 13px muted text. `.banner` is an outlined white box for read errors. `.facts` is a two-column `dl` for image details. |
 
 ## Do's and Don'ts

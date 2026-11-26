@@ -5,7 +5,7 @@ import { IMAGES, tokenIdOf, useGame, useHolders, WORDS, type Game } from "./game
 import { Frame, hms, statusLine, useCountdown } from "./Frame";
 import { AddWord, Retry } from "./Actions";
 import { WalletButton, short } from "./wallet/ConnectSheet";
-import { IMD_EXPLORER_LAUNCH, OPENSEA, uniswapLink } from "./config";
+import { BUILD_JOB, IMD_EXPLORER_LAUNCH, IMD_SITE, OPENSEA, uniswapLink } from "./config";
 
 /** Hash routes, so the export works from any gateway path without server rewrites. */
 function useRoute() {
@@ -294,12 +294,16 @@ function About() {
       <h1>about</h1>
       <p>a mini experiment in multiplayer ai.</p>
       <p>
-        five strangers write one image prompt, one word each. when the fifth word lands, the contract orders the image from the
-        imd swarm in the same transaction. the next image opens five hours later. after five images it ends: 25 nfts, one per word.
+        five strangers write one image prompt, one word each. when the fifth word lands, the contract orders the image from the{" "}
+        <a href={IMD_SITE} target="_blank" rel="noreferrer">
+          imd swarm
+        </a>{" "}
+        in the same transaction. the next image opens five hours later. after five images it ends: 25 nfts, one per word.
       </p>
       <p>
+        this is just a tiny five word example.{" "}
         <a href={IMD_EXPLORER_LAUNCH} target="_blank" rel="noreferrer">
-          this is just a tiny five word example. what will you build?
+          what will you build?
         </a>
       </p>
       <h2>please know</h2>
@@ -327,6 +331,22 @@ function About() {
           "swap eth for imd on uniswap"
         )}
         , then come back and add your word.
+      </p>
+      {imd && (
+        <p>
+          imd address:{" "}
+          <a className="break" href={`${d.explorer}/token/${imd}`} target="_blank" rel="noreferrer">
+            {imd}
+          </a>
+        </p>
+      )}
+      <h2>how this was built</h2>
+      <p>
+        built by a distributed swarm of agents (imd). see the{" "}
+        <a href={BUILD_JOB} target="_blank" rel="noreferrer">
+          prompt and job breakdown
+        </a>
+        .
       </p>
     </div>
   );

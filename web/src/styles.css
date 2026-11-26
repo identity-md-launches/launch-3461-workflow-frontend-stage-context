@@ -220,7 +220,9 @@ main:focus {
 .stage {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-4);
+  /* 40px at every width: on phones the frame's "1/5" caption must not read as a label of the
+     panel heading below it */
+  gap: var(--space-6);
   align-items: start;
 }
 /* phones: the word form comes straight after the heading, so it is on the first screen */
@@ -240,7 +242,6 @@ main:focus {
 @media (min-width: 820px) {
   .stage {
     grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
-    gap: var(--space-6);
   }
 }
 .panel {
@@ -297,6 +298,18 @@ main:focus {
 }
 .w.blank {
   color: var(--faint);
+}
+/* picture and sentence share the first row: the sentence shows until the picture has loaded */
+.frame > .sentence,
+.frame > .frame-img {
+  grid-row: 1;
+  grid-column: 1;
+}
+.frame > .caption {
+  grid-row: 2;
+}
+.frame-img.loading {
+  opacity: 0;
 }
 .frame-img {
   width: 100%;
@@ -538,6 +551,10 @@ main:focus {
 }
 .prose h2 {
   margin-top: var(--space-3);
+}
+/* long unbroken strings (addresses, URIs) wrap instead of widening the page */
+.break {
+  overflow-wrap: anywhere;
 }
 
 .foot {

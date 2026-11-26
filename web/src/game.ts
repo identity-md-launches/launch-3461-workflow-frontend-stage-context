@@ -14,7 +14,6 @@ import {
   type TransactionReceipt,
 } from "viem";
 import { useDeployment } from "./deployment";
-import { IPFS_GATEWAYS } from "./config";
 
 export const IMAGES = 5;
 export const WORDS = 5;
@@ -38,6 +37,8 @@ export type ImageInfo = {
   words: string[];
   imageURI: string;
   canRetry: boolean;
+  /** When the game read that produced this image landed (ms). A failed image load retries on the next one. */
+  readAt: number;
 };
 
 export type Game = {
@@ -128,6 +129,7 @@ export function useGame() {
           words: [...r.words],
           imageURI: uris[i]!,
           canRetry: retries[i]!,
+          readAt: Date.now(),
         })),
       };
     },
@@ -198,8 +200,6 @@ export const fmt = (v: bigint, decimals: number) => {
   return s.includes(".") ? s.replace(/0+$/, "").replace(/\.$/, "") : s;
 };
 
-/** ipfs://CID/path to a public gateway URL; any other URI unchanged. */
-export const gatewayUrl = (uri: string, i = 0) => (uri.startsWith("ipfs://") ? `${IPFS_GATEWAYS[i]}${uri.slice(7)}` : uri);
 
 /** What the visitor should read for a failed call: the contract's own reason, in its words. */
 export function describeError(e: unknown): string {
