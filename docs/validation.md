@@ -41,10 +41,46 @@ The frontend stage of launch `a9881956-4bea-4ae1-885e-94a534f54cdf`. Contract `F
 - Live mainnet reads through the contributor RPC at build time: `currentImage()` = 1,
   `amountDue()` = 0.1 IMD, `totalSupply()` = 0, and code is present (16,509 bytes).
 
+## Revision 2: review findings (this round)
+
+An outside review reported eleven defects. Each was reproduced before it was changed: the new
+mocked-RPC harness `web/tests/mock-rpc.mjs` (Chromium 1255 via Playwright 1.65.1, 390×844 unless
+stated) was run against the previously accepted export (`git archive HEAD dist`) and against the
+new one. Old export: 1 passed, 16 failed across the scenarios below, plus 5 frame failures. New
+export: **60 passed, 0 failed**.
+
+| Finding | Reproduced on the old export | Fix | Check on the new export |
+| --- | --- | --- | --- |
+| Words clipped or covered in frames (high) | Play frame y=257–613, first word line from y=250, caption from y=578; the 320×700 play frame and the 390/1440 gallery tiles clipped too | The frame is a two-row grid, sentence then caption (`web/src/styles.css:253`). A container query sets 20px and 16px sides in large frames under 461px. Gallery tiles: 13px, 4px padding, 168px minimum, `auto-fit`, 8px gap. The gateway-failure notice is gone; the caption says "image unavailable" and the URI stays in the details (`web/src/Frame.tsx`) | `frames`: every word box inside its frame and above its caption on play and gallery at 390×844, 320×700 and 1440×844. `delivered`: both gateways 502, the words stay visible and the caption says "image unavailable" |
+| Unavailable price shown as free (high) | `add · price unavailable` never appeared; the page showed `add · 0 IMD` | `amountDue` read failure is `null`, not `0n` (`web/src/game.ts:92`). Button "add · price unavailable", disabled, and the recovery line. The click-time read is caught and shown beside the draft. Same for "order again" | `price`: disabled label and message. A failed click-time read shows the message, keeps the draft, sends nothing and raises no page error |
+| Surplus allowance could pay more (high) | Allowance 0.5, price 0.1: only `addWord` was sent | Approval is skipped only when the allowance equals the price, else set to exactly the price. Before the paying transaction the price and allowance are read again. If either moved the flow stops, shows the new price and needs a new click (`web/src/Actions.tsx` `exactApproval`) | `allowance`: `approve(FiveWords, 0.1)` then `addWord`. With the price moved to 0.2 after the approval: no `addWord`, "the price changed to 0.2 IMD…", and the button reads "add · 0.2 IMD" |
+| Decline cleared the draft (medium) | Draft empty, add disabled | The runner returns whether every receipt confirmed. The draft is cleared only then; otherwise focus returns to the input | `decline`: word kept, focus in `#word`, add enabled |
+| Retry panel lost its feedback (medium) | No switch message; the panel was gone after the refetch | The panel stays while it has steps or a result. Only the button and its note hide. The switch error renders under the button | `retry`: "the wallet declined the switch." shown. After `ImageOrdered` and the refetch, the result "(attempt 2)" and both transaction links remain |
+| "nothing was sent" after a mined approval (medium) | Step and summary said "nothing was sent" | Step: "the wallet declined the add transaction." Summary: "your 0.1 IMD approval is onchain. your word was not added." (from the approval receipt). For a retry, "…image n was not ordered again." | `decline`: exact texts asserted |
+| Mobile sheet hid an announced wallet (medium) | Test Wallet missing on an iPhone UA | Announced wallets always show. The generic row shows only when `window.ethereum` exists. The open-in rows show on phones with no in-page wallet. Desktop with none gets a note instead of a failing row | `sheet`: iPhone + EIP-6963 lists and connects Test Wallet. iPhone without a wallet gets the open-in rows. Desktop without one has no "browser wallet" row |
+| One failed holder hid all (medium) | No "holder unavailable"; zero links | One query per token with 2 retries. A failed slot shows "holder unavailable · retry" (`.linkbtn`) | `holders`: 4 links and 1 "holder unavailable · retry". Its retry restores the fifth |
+| Escape dropped focus (low) | `activeElement` not the address button | Escape focuses the address button | `escape` |
+| "opened" for a future time (low) | (by reading `App.tsx`) | "opens" while `opensAt` is ahead, the same comparison as the countdown | `holders`: image 1 "opened", image 2 "opens" |
+| "open in Rabby" went to rabby.io (low) | Row label "open in Rabby" | The row reads "get Rabby" | `sheet`: "get Rabby" → `https://rabby.io/`. The other rows carry the page URL |
+
+WebKit could not be launched on this machine (Playwright reported missing `libgtk-4`, `libpango`
+and `libcairo`). The WebKit gallery report is therefore unverified here. The fix is plain CSS
+grid and flex, with a container query (WebKit 16+). The harness has `WEBKIT=1` to include it.
+
+The fork-backed `web/tests/interaction.mjs` was **not re-run** this round. This machine has no
+`anvil` and no mainnet RPC. Its results below are from the accepted round. The mocked harness
+covers the changed flows (approve and add, decline, retry, wrong chain), but not against the real
+deployed bytecode.
+
 ## Verification (commands actually run)
 
 | Check | Command | Result |
 | --- | --- | --- |
+| Typecheck (this round) | `cd web && npx tsc -p tsconfig.json` | passed, no errors |
+| Production build (this round) | `cd web && npm run build` | passed. The manifest script printed "1 contract(s), 10 assets", 1,401,864 bytes |
+| Mocked interaction (this round) | `cd web && node tests/mock-rpc.mjs` | **60 passed, 0 failed** |
+| Design probe (this round) | `IMD_PLAYWRIGHT=… node .imd/reads/skills/design-critic/scripts/taste.mjs --out test/scratch/taste --offline` | **15/16**, the same as before: only `type-faces` (monospace prose, from the brief) fails. The 390 screenshot shows the frame, "your word" and "add" on the first screen |
+| Manifest re-check (this round) | script: file set vs `assets`, SHA-256 of each, `network`/`walletAddChain` byte-equal, key set | passed: 10 files, all hashes match, 9 keys, no `poolKey` (the handoff has none) |
 | Typecheck | `cd web && npm run typecheck` (`tsc -p tsconfig.json`) | passed, no errors |
 | Production build | `cd web && npm run build` | passed. Vite 6 wrote `dist/`, then the manifest script printed "1 contract(s), 10 assets" |
 | Interaction test | `FORK_URL=… ANVIL=anvil node web/tests/interaction.mjs` | **39 passed, 0 failed**, 0 outside requests |
@@ -118,12 +154,14 @@ Screenshots from the final run were viewed (390 disconnected, 390 countdown, 144
 - **No real wallet or live mainnet transaction.** Signing was simulated by a scripted EIP-1193
   wallet against an anvil fork. MetaMask, Rabby, Coinbase Wallet/Smart Wallet popups, the mobile
   "open in" links and a real `wallet_addEthereumChain` prompt were not exercised.
-- **`retry`** was not exercised. It needs a failed or day-old order, and the fork test did not
-  simulate an Intake failure callback. The control, its approval of exactly `retryPrice()` and its
-  `ImageOrdered` receipt report share code with the tested add flow.
-- **A delivered image** has not been seen: none exists yet on mainnet, and the fork test did not
-  deliver one. The frame flip (`Frame.tsx`) and gateway fallback are untested in a browser.
-- **WebKit/Safari** and physical devices were not tested. Only Chromium ran. Screen-reader and
+- **`retry`** was exercised only against the mocked RPC (`retry` scenario): an exact approval of
+  `retryPrice()`, the `retry` call and the `ImageOrdered` receipt report. It has not run against the
+  deployed bytecode, because the fork test did not simulate an Intake failure callback.
+- **A delivered image** has not been seen: none exists yet on mainnet. With mocked state, the
+  gateway-failure path was checked (both gateways 502: "image unavailable", words kept). A
+  successful picture load was not tested.
+- **WebKit/Safari** and physical devices were not tested. Only Chromium ran. WebKit could not
+  launch here (missing GTK libraries). Screen-reader and
   native-zoom checks were not performed.
 - **Gas**: the page sets no gas limit and lets the wallet estimate. FiveWords has no `gasleft()`
   check or fixed-gas forward on the paths the page calls. On the fork, the fifth word (which calls

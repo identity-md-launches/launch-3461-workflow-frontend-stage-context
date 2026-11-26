@@ -200,7 +200,8 @@ function ImagePage({ n, game }: { n: number; game: Game | undefined }) {
             {Array.from({ length: WORDS }, (_, i) => {
               const id = tokenIdOf(n, i + 1);
               const w = info && i < info.wordCount ? info.words[i] : "";
-              const holder = holders.data?.[i];
+              const lookup = holders[i];
+              const holder = lookup?.data;
               return (
                 <li key={i} className={w ? "slot filled" : "slot"}>
                   <span className="slot-n">{i + 1}</span>
@@ -217,6 +218,13 @@ function ImagePage({ n, game }: { n: number; game: Game | undefined }) {
                             {short(getAddress(holder))}
                           </a>
                         </>
+                      ) : lookup?.isError && !lookup.isFetching ? (
+                        <>
+                          {" · holder unavailable · "}
+                          <button type="button" className="linkbtn" onClick={() => void lookup.refetch()}>
+                            retry
+                          </button>
+                        </>
                       ) : (
                         " · reading holder…"
                       )}
@@ -232,7 +240,8 @@ function ImagePage({ n, game }: { n: number; game: Game | undefined }) {
               <dd>{statusLine(info)}</dd>
               {info.opensAt > 0 && (
                 <>
-                  <dt>opened</dt>
+                  {/* the same comparison as play's countdown: still ahead means not open yet */}
+                  <dt>{info.opensAt > Date.now() / 1000 ? "opens" : "opened"}</dt>
                   <dd>{when(info.opensAt)}</dd>
                 </>
               )}

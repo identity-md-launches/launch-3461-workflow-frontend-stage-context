@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useAccount, useConnect, useDisconnect, type Connector } from "wagmi";
 import { WALLET_ICONS } from "./wallet-icons";
-import { OPEN_IN, isMobileBrowser } from "./open-in";
+import { OPEN_IN, hasInjectedProvider, isMobileBrowser } from "./open-in";
 import { useDeployment } from "../deployment";
 import { switchToChain } from "./switch";
 
@@ -31,9 +31,15 @@ export function WalletButton() {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState(false);
+  const addrButton = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!menu) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMenu(false);
+    // Escape closes the menu and returns focus to the address button that opened it.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setMenu(false);
+      addrButton.current?.focus();
+    };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
   }, [menu]);
@@ -65,7 +71,7 @@ export function WalletButton() {
   if (isConnected && address) {
     return (
       <span className="wallet">
-        <button className="btn" aria-expanded={menu} aria-controls="wallet-menu" onClick={() => setMenu(!menu)}>
+        <button ref={addrButton} className="btn" aria-expanded={menu} aria-controls="wallet-menu" onClick={() => setMenu(!menu)}>
           {short(address)}
         </button>
         {menu && (
@@ -129,12 +135,14 @@ function Sheet({ onClose }: { onClose: () => void }) {
   }, [isConnected, onClose]);
   useEffect(() => () => reset(), [reset]);
 
-  // EIP-6963 names each installed extension; wagmi's generic injected row is only for a browser
-  // where discovery found nothing, and then it is called what it is.
-  const named = connectors.some((c) => c.type === "injected" && c.id !== "injected");
-  const listed = [...connectors.filter((c) => c.type === "injected"), ...connectors.filter((c) => c.type !== "injected")].filter(
-    (c) => !(c.id === "injected" && named),
-  );
+  // EIP-6963 names each installed extension, and those rows always show, on phones too (a wallet's
+  // own in-app browser announces itself). wagmi's generic injected row shows only when discovery
+  // named nothing but window.ethereum exists, and then it is called what it is. With no wallet in
+  // the page, a phone gets the open-in links instead.
+  const namedList = connectors.filter((c) => c.type === "injected" && c.id !== "injected");
+  const generic = connectors.filter((c) => c.id === "injected" && !namedList.length && hasInjectedProvider());
+  const listed = [...namedList, ...generic, ...connectors.filter((c) => c.type !== "injected")];
+  const inPage = namedList.length > 0 || generic.length > 0;
   const label = (c: Connector) =>
     c.id === "injected" ? "browser wallet" : c.id === "coinbaseWalletSDK" && mobile ? "Coinbase Smart Wallet" : c.name;
   const icon = (c: Connector) => c.icon ?? (WALLET_ICONS[c.id] ? svgSrc(WALLET_ICONS[c.id]!) : undefined);
@@ -150,22 +158,24 @@ function Sheet({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         {mobile &&
+          !inPage &&
           OPEN_IN.map((w) => (
             <a key={w.id} className="row" href={w.href(location.href)}>
               <span className="ic">{WALLET_ICONS[w.id] && <img width={28} height={28} src={svgSrc(WALLET_ICONS[w.id]!)} alt="" />}</span>
-              <span>open in {w.name}</span>
+              <span>
+                {w.verb ?? "open in"} {w.name}
+              </span>
             </a>
           ))}
-        {listed
-          .filter((c) => !mobile || c.type !== "injected")
-          .map((c) => (
-            <button key={c.uid} className="row" onClick={() => connect({ connector: c })} disabled={isPending}>
-              <span className="ic">{icon(c) && <img width={28} height={28} src={icon(c)} alt="" />}</span>
-              <span>
-                {label(c)}
-                {isPending && variables?.connector === c ? " · opening…" : ""}
-              </span>
-            </button>
+        {!mobile && !inPage && <p className="note">no browser wallet was found in this browser. install one, or use a wallet below.</p>}
+        {listed.map((c) => (
+          <button key={c.uid} className="row" onClick={() => connect({ connector: c })} disabled={isPending}>
+            <span className="ic">{icon(c) && <img width={28} height={28} src={icon(c)} alt="" />}</span>
+            <span>
+              {label(c)}
+              {isPending && variables?.connector === c ? " · opening…" : ""}
+            </span>
+          </button>
           ))}
         {error && (
           <p className="note" role="status">

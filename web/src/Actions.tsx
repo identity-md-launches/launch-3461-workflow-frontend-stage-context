@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAccount } from "wagmi";
-import { erc20Abi, type Address } from "viem";
+import { erc20Abi, type Address, type TransactionReceipt } from "viem";
 import { useDeployment } from "./deployment";
-import { approvalEvents, fiveWordsEvents, fmt, useMine, useTxRunner, WORD_RE, type Game, type Step } from "./game";
+import { approvalEvents, fiveWordsEvents, fmt, isRejection, PRICE_UNAVAILABLE, useMine, useTxRunner, WORD_RE, type Game, type Step } from "./game";
 import { useConnectSheet } from "./wallet/ConnectSheet";
 import { switchToChain } from "./wallet/switch";
 import { hms, useCountdown } from "./Frame";
@@ -44,13 +44,60 @@ function useGate(game: Game | undefined) {
     try {
       await switchToChain(connector, d);
     } catch (e) {
-      setSwitchNote((e as Error).message);
+      setSwitchNote(isRejection(e) ? "the wallet declined the switch." : (e as Error).message);
     }
   };
   return { isConnected, wrongChain, openSheet, doSwitch, switchNote, verified: !!game?.codeOk && !!game?.rpcChainOk };
 }
 
 const tokenIdText = (v: unknown) => `#${String(v)}`;
+
+type Token = NonNullable<Game["token"]>;
+
+/**
+ * The approval step and the price recheck shared by "add" and "order again". The allowance is set
+ * to exactly the quoted price (a larger leftover allowance is replaced, not reused), and the price
+ * is read again before the paying transaction: if it moved, the flow stops and asks for a fresh
+ * click at the new amount.
+ */
+function exactApproval(d: ReturnType<typeof useDeployment>, token: Token, owner: Address, price: bigint, priceFn: string) {
+  const text = `${fmt(price, token.decimals)} ${token.symbol}`;
+  let approved = "";
+  const allowance = () =>
+    d.publicClient.readContract({ address: token.address, abi: erc20Abi, functionName: "allowance", args: [owner, d.address] });
+  return {
+    approved: () => approved,
+    step: {
+      label: `approve exactly ${text} to fivewords`,
+      address: token.address,
+      abi: erc20Abi,
+      functionName: "approve",
+      args: [d.address, price],
+      skip: async () => (await allowance()) === price,
+      skipped: `the allowance is already exactly ${text}.`,
+      declined: "the wallet declined the approval. nothing was sent.",
+      report: async (r: TransactionReceipt) => {
+        const ev = approvalEvents(r, token.address).find((e) => (e.args.spender as Address).toLowerCase() === d.address.toLowerCase());
+        if (!ev) throw new Error("the receipt shows no approval to fivewords.");
+        approved = `${fmt(ev.args.value, token.decimals)} ${token.symbol}`;
+        return `approved ${approved}.`;
+      },
+    },
+    /** Before the paying transaction: same price, and the allowance still exactly that price. */
+    recheck: async () => {
+      let now: bigint;
+      try {
+        now = (await d.publicClient.readContract({ address: d.address, abi: d.abi, functionName: priceFn })) as bigint;
+      } catch {
+        throw new Error(PRICE_UNAVAILABLE);
+      }
+      if (now !== price) {
+        throw new Error(`the price changed to ${fmt(now, token.decimals)} ${token.symbol}. press the button again to approve exactly that.`);
+      }
+      if ((await allowance()) !== price) throw new Error(`the allowance is no longer exactly ${text}. press the button again.`);
+    },
+  };
+}
 
 /** The word input and "add · 0.1 IMD": approve exactly what is due, then addWord. */
 export function AddWord({ game, image, open, opensAt }: { game: Game | undefined; image: number; open: boolean; opensAt: number }) {
@@ -63,20 +110,29 @@ export function AddWord({ game, image, open, opensAt }: { game: Game | undefined
   const tx = useTxRunner();
   const [word, setWord] = useState("");
   const [touched, setTouched] = useState(false);
+  const [priceNote, setPriceNote] = useState("");
+  const [refocus, setRefocus] = useState(0);
+  const input = useRef<HTMLInputElement>(null);
   const left = useCountdown(opensAt);
+  // After a declined or failed flow the input is enabled again; put the cursor back in the draft.
+  useEffect(() => {
+    if (refocus && !tx.running) input.current?.focus();
+  }, [refocus, tx.running]);
 
-  const due = game?.amountDue ?? 0n;
-  const dueText = token ? `${fmt(due, token.decimals)} ${token.symbol}` : "…";
+  const due = game?.amountDue ?? null;
+  const priceUnknown = !!game && due === null;
+  const dueText = !token || !game ? "…" : due === null ? "price unavailable" : `${fmt(due, token.decimals)} ${token.symbol}`;
   const valid = WORD_RE.test(word);
   const over = !!game && game.currentImage === 0;
-  const lowBalance = !!mine.data && mine.data.balance < due;
-  const needsApproval = !!mine.data && mine.data.allowance < due;
+  const lowBalance = !!mine.data && due !== null && mine.data.balance < due;
+  const needsApproval = !!mine.data && due !== null && mine.data.allowance !== due;
 
   let blocker = "";
   if (!game) blocker = "reading the contract…";
   else if (over) blocker = "all five images are ordered. the game is over.";
   else if (!gate.verified) blocker = "the contract could not be verified on this chain, so adding is off.";
   else if (!open) blocker = `image ${image} opens in ${hms(left)}.`;
+  else if (priceUnknown) blocker = PRICE_UNAVAILABLE;
   else if (!gate.isConnected) blocker = "connect a wallet to add a word.";
   else if (gate.wrongChain) blocker = `your wallet is on another network. switch to ${d.chain.name}.`;
   else if (mine.data?.wrote) blocker = `this wallet already wrote a word in image ${image}. one word per wallet per image.`;
@@ -86,6 +142,7 @@ export function AddWord({ game, image, open, opensAt }: { game: Game | undefined
 
   async function submit() {
     if (!token || !address) return;
+    setPriceNote("");
     try {
       await addFlow(token, address);
     } finally {
@@ -93,32 +150,29 @@ export function AddWord({ game, image, open, opensAt }: { game: Game | undefined
     }
   }
 
-  async function addFlow(token: NonNullable<Game["token"]>, address: Address) {
+  async function addFlow(token: Token, address: Address) {
     // The price is the Intake's and can move: read what is due right before approving it.
-    const liveDue = (await d.publicClient.readContract({ address: d.address, abi: d.abi, functionName: "amountDue" })) as bigint;
+    let liveDue: bigint;
+    try {
+      liveDue = (await d.publicClient.readContract({ address: d.address, abi: d.abi, functionName: "amountDue" })) as bigint;
+    } catch {
+      setPriceNote(PRICE_UNAVAILABLE);
+      setRefocus((n) => n + 1);
+      return;
+    }
     const liveText = `${fmt(liveDue, token.decimals)} ${token.symbol}`;
-    await tx.run([
-      {
-        label: `approve exactly ${liveText} to fivewords`,
-        address: token.address,
-        abi: erc20Abi,
-        functionName: "approve",
-        args: [d.address, liveDue],
-        skip: async () =>
-          (await d.publicClient.readContract({ address: token.address, abi: erc20Abi, functionName: "allowance", args: [address, d.address] })) >=
-          liveDue,
-        report: async (r) => {
-          const ev = approvalEvents(r, token.address).find((e) => (e.args.spender as Address).toLowerCase() === d.address.toLowerCase());
-          if (!ev) throw new Error("the receipt shows no approval to fivewords.");
-          return `approved ${fmt(ev.args.value, token.decimals)} ${token.symbol}.`;
-        },
-      },
+    const approval = exactApproval(d, token, address, liveDue, "amountDue");
+    const ok = await tx.run([
+      approval.step,
       {
         label: `add "${word}" · ${liveText}`,
         address: d.address,
         abi: d.abi,
         functionName: "addWord",
         args: [word],
+        before: approval.recheck,
+        declined: "the wallet declined the add transaction.",
+        notDone: () => (approval.approved() ? `your ${approval.approved()} approval is onchain. your word was not added.` : ""),
         report: async (r) => {
           const evs = fiveWordsEvents(r, d.abi, d.address);
           const added = evs.find((e) => e.eventName === "WordAdded");
@@ -132,8 +186,11 @@ export function AddWord({ game, image, open, opensAt }: { game: Game | undefined
         },
       },
     ]);
-    setWord("");
-    setTouched(false);
+    // Only a receipt with WordAdded clears the draft; a decline or a revert keeps it to try again.
+    if (ok) {
+      setWord("");
+      setTouched(false);
+    } else setRefocus((n) => n + 1);
   }
 
   const canSubmit = !blocker && valid && !tx.running;
@@ -143,7 +200,8 @@ export function AddWord({ game, image, open, opensAt }: { game: Game | undefined
     setTouched(true);
     if (canSubmit) void submit();
   };
-  const buttonDisabled = tx.running || (gate.isConnected && !gate.wrongChain && (!!blocker || !valid)) || (!gate.isConnected && (!open || over));
+  const buttonDisabled =
+    tx.running || (gate.isConnected && !gate.wrongChain && (!!blocker || !valid)) || (!gate.isConnected && (!open || over || priceUnknown));
   const label = tx.running ? "working…" : gate.wrongChain ? `switch to ${d.chain.name}` : `add · ${dueText}`;
 
   return (
@@ -157,10 +215,14 @@ export function AddWord({ game, image, open, opensAt }: { game: Game | undefined
       <label htmlFor="word">your word</label>
       <div className="add-row">
         <input
+          ref={input}
           id="word"
           name="word"
           value={word}
-          onChange={(e) => setWord(e.target.value)}
+          onChange={(e) => {
+            setWord(e.target.value);
+            setPriceNote("");
+          }}
           onBlur={() => setTouched(true)}
           placeholder="lantern"
           autoComplete="off"
@@ -182,6 +244,11 @@ export function AddWord({ game, image, open, opensAt }: { game: Game | undefined
       </p>
       {/* the countdown itself sits above the form, so a closed round adds no second line here */}
       {blocker && open && <p className="note">{blocker}</p>}
+      {priceNote && (
+        <p className="note error" role="status">
+          {priceNote}
+        </p>
+      )}
       {gate.switchNote && <p className="note error">{gate.switchNote}</p>}
       {!blocker && needsApproval && (
         <p className="note">two wallet prompts: approve exactly {dueText} to fivewords, then add your word.</p>
@@ -203,63 +270,82 @@ export function Retry({ game, image }: { game: Game | undefined; image: number }
   const { address } = useAccount();
   const gate = useGate(game);
   const tx = useTxRunner();
+  const [priceNote, setPriceNote] = useState("");
   const info = game?.images[image - 1];
   const token = game?.token;
   const mine = useMine(token?.address, 0);
-  if (!game || !info || !info.canRetry || !token) return null;
+  // Once the order went through the image is no longer retryable, but the panel stays to show
+  // the steps, the receipt summary and the transaction link.
+  const hasFeedback = tx.steps.length > 0 || !!tx.result;
+  if (!game || !info || !token || (!info.canRetry && !hasFeedback)) return null;
   const price = game.retryPrice;
-  const priceText = price != null ? `${fmt(price, token.decimals)} ${token.symbol}` : "…";
+  const priceText = price != null ? `${fmt(price, token.decimals)} ${token.symbol}` : "price unavailable";
   const low = !!mine.data && price != null && mine.data.balance < price;
 
   async function submit() {
     if (!token || !address) return;
-    const live = (await d.publicClient.readContract({ address: d.address, abi: d.abi, functionName: "retryPrice" })) as bigint;
-    const liveText = `${fmt(live, token.decimals)} ${token.symbol}`;
-    await tx.run([
-      {
-        label: `approve exactly ${liveText} to fivewords`,
-        address: token.address,
-        abi: erc20Abi,
-        functionName: "approve",
-        args: [d.address, live],
-        skip: async () =>
-          (await d.publicClient.readContract({ address: token.address, abi: erc20Abi, functionName: "allowance", args: [address, d.address] })) >= live,
-        report: async (r) => {
-          const ev = approvalEvents(r, token.address).find((e) => (e.args.spender as Address).toLowerCase() === d.address.toLowerCase());
-          if (!ev) throw new Error("the receipt shows no approval to fivewords.");
-          return `approved ${fmt(ev.args.value, token.decimals)} ${token.symbol}.`;
+    setPriceNote("");
+    try {
+      let live: bigint;
+      try {
+        live = (await d.publicClient.readContract({ address: d.address, abi: d.abi, functionName: "retryPrice" })) as bigint;
+      } catch {
+        setPriceNote(PRICE_UNAVAILABLE);
+        return;
+      }
+      const liveText = `${fmt(live, token.decimals)} ${token.symbol}`;
+      const approval = exactApproval(d, token, address, live, "retryPrice");
+      await tx.run([
+        approval.step,
+        {
+          label: `order image ${image} again · ${liveText}`,
+          address: d.address,
+          abi: d.abi,
+          functionName: "retry",
+          args: [BigInt(image)],
+          before: approval.recheck,
+          declined: "the wallet declined the order transaction.",
+          notDone: () => (approval.approved() ? `your ${approval.approved()} approval is onchain. image ${image} was not ordered again.` : ""),
+          report: async (r) => {
+            const ev = fiveWordsEvents(r, d.abi, d.address).find((e) => e.eventName === "ImageOrdered");
+            if (!ev) throw new Error("the transaction succeeded but the receipt shows no order.");
+            return `image ${ev.args.image} is ordered again (attempt ${ev.args.attempt}).`;
+          },
         },
-      },
-      {
-        label: `order image ${image} again · ${liveText}`,
-        address: d.address,
-        abi: d.abi,
-        functionName: "retry",
-        args: [BigInt(image)],
-        report: async (r) => {
-          const ev = fiveWordsEvents(r, d.abi, d.address).find((e) => e.eventName === "ImageOrdered");
-          if (!ev) throw new Error("the transaction succeeded but the receipt shows no order.");
-          return `image ${ev.args.image} is ordered again (attempt ${ev.args.attempt}).`;
-        },
-      },
-    ]);
-    await qc.invalidateQueries();
+      ]);
+    } finally {
+      await qc.invalidateQueries();
+    }
   }
 
   const why = info.status === "failed" ? "the order failed." : "the order has had no answer for a day.";
   return (
     <div className="retry">
-      <p className="note">
-        {why} anyone can pay the full price to order it again, with the same five words. no refunds.
-      </p>
-      <button
-        className="btn"
-        disabled={tx.running || (gate.isConnected && !gate.wrongChain && (low || !gate.verified))}
-        onClick={() => (!gate.isConnected ? gate.openSheet() : gate.wrongChain ? gate.doSwitch() : submit())}
-      >
-        {tx.running ? "working…" : gate.wrongChain ? `switch to ${d.chain.name}` : `order again · ${priceText}`}
-      </button>
-      {low && <p className="note">this wallet holds less than {priceText}.</p>}
+      {info.canRetry && (
+        <>
+          <p className="note">
+            {why} anyone can pay the full price to order it again, with the same five words. no refunds.
+          </p>
+          <button
+            className="btn"
+            disabled={tx.running || price == null || (gate.isConnected && !gate.wrongChain && (low || !gate.verified))}
+            onClick={() => (!gate.isConnected ? gate.openSheet() : gate.wrongChain ? gate.doSwitch() : submit())}
+          >
+            {tx.running ? "working…" : gate.wrongChain ? `switch to ${d.chain.name}` : `order again · ${priceText}`}
+          </button>
+          {gate.switchNote && (
+            <p className="note error" role="status">
+              {gate.switchNote}
+            </p>
+          )}
+          {(price == null || priceNote) && (
+            <p className="note error" role="status">
+              {PRICE_UNAVAILABLE}
+            </p>
+          )}
+          {low && <p className="note">this wallet holds less than {priceText}.</p>}
+        </>
+      )}
       <Steps steps={tx.steps} summarized={!!tx.result?.ok} />
       {tx.result && (
         <p className={tx.result.ok ? "result" : "result error"} role="status">

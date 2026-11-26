@@ -4,7 +4,10 @@ import { IPFS_GATEWAYS } from "./config";
 
 /**
  * One white frame per image. Until the image arrives the sentence builds inside it, word by word,
- * as plain text; once delivered the frame shows the picture instead.
+ * as plain text; once delivered the frame shows the picture instead. The sentence (or picture)
+ * and the caption are separate rows, so the caption never covers words. When no gateway serves a
+ * delivered picture the sentence stays and the caption says "image unavailable"; the full result
+ * URI is on the image's page.
  */
 export function Frame({ image, size = "large" }: { image: ImageInfo; size?: "large" | "small" }) {
   const [gw, setGw] = useState(0);
@@ -40,12 +43,11 @@ export function Frame({ image, size = "large" }: { image: ImageInfo; size?: "lar
           )}
         </p>
       )}
-      {delivered && failed && <p className="note frame-note">the image is onchain but no gateway answered. {image.imageURI}</p>}
       <figcaption className="caption">
         <span>
           {image.n}/{IMAGES}
         </span>
-        <span>{statusLine(image)}</span>
+        <span>{delivered && failed ? "image unavailable" : size === "small" ? shortStatus(image) : statusLine(image)}</span>
       </figcaption>
     </figure>
   );
@@ -59,6 +61,20 @@ export function statusLine(i: ImageInfo): string {
       return "ordered, the swarm is drawing it";
     case "failed":
       return "the order failed";
+    case "delivered":
+      return "delivered";
+  }
+}
+
+/** The gallery tile's one-line status: the tile is too narrow for the full line. */
+export function shortStatus(i: ImageInfo): string {
+  switch (i.status) {
+    case "writing":
+      return `${i.wordCount} of ${WORDS} words`;
+    case "ordered":
+      return "ordered";
+    case "failed":
+      return "order failed";
     case "delivered":
       return "delivered";
   }

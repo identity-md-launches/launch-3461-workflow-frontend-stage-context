@@ -250,38 +250,50 @@ main:focus {
   min-width: 0;
 }
 
-/* the frame: one white square per image */
+/* the frame: one white square per image. Two rows: the sentence (or picture), then the caption. */
 .frame {
   margin: 0;
   background: var(--paper);
   border: var(--line);
   aspect-ratio: 1 / 1;
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
   overflow: hidden;
   width: 100%;
+  container-type: inline-size;
 }
 .frame-large {
   max-width: min(100%, 64vh);
 }
 .sentence {
+  align-self: center;
   display: flex;
   flex-wrap: wrap;
+  align-content: center;
   gap: 0.2em 0.55em;
   justify-content: center;
-  padding: 12% 10%;
+  padding: var(--space-4) 10%;
   font-size: var(--fs-h1);
   line-height: 1.25;
   text-align: center;
   overflow-wrap: anywhere;
   min-width: 0;
+  min-height: 0;
+}
+.w {
   max-width: 100%;
 }
+/* a narrow large frame: a 20-letter word at 28px would not fit, so the 20px step */
+@container (max-width: 460px) {
+  .frame-large .sentence {
+    font-size: var(--fs-h2);
+    padding-inline: var(--space-4);
+  }
+}
 .frame-small .sentence {
-  font-size: var(--fs-body);
-  padding: 14% 10%;
+  font-size: var(--fs-meta);
+  line-height: 1.2;
+  padding: var(--space-1);
 }
 .w.blank {
   color: var(--faint);
@@ -289,19 +301,11 @@ main:focus {
 .frame-img {
   width: 100%;
   height: 100%;
+  min-height: 0;
   object-fit: cover;
   display: block;
 }
-.frame-note {
-  position: absolute;
-  inset: auto var(--space-3) 44px;
-  overflow-wrap: anywhere;
-}
 .caption {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
   display: flex;
   justify-content: space-between;
   gap: var(--space-3);
@@ -309,6 +313,10 @@ main:focus {
   font-size: var(--fs-meta);
   color: var(--muted);
   background: var(--paper);
+}
+.frame-small .caption {
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
 }
 
 /* the five numbered slots */
@@ -471,8 +479,9 @@ main:focus {
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: var(--space-4);
+  /* 168px tiles and an 8px gap: two columns at 390, and room for a 20-letter word at 13px */
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  gap: var(--space-2);
 }
 .tile {
   display: block;
@@ -480,6 +489,17 @@ main:focus {
 }
 .tile:hover .frame {
   outline: 2px solid var(--ink);
+}
+/* a quiet inline action inside a line of text: "holder unavailable · retry" */
+.linkbtn {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
 }
 .crumbs {
   font-size: var(--fs-meta);

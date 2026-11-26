@@ -40,6 +40,10 @@ were not measured one by one.
 - Sizes (tokens): `--fs-meta` 13px (notes, captions, steps, footer, facts), `--fs-body` 15px (body,
   buttons, slots), `--fs-input` 16px (inputs, so iOS does not zoom), `--fs-h2` 20px (panel
   headings), `--fs-h1` 28px (page headline and the sentence in the large frame). Five sizes in all.
+- The sentence inside a frame: 28px in a large frame at least 461px wide, 20px (`--fs-h2`) with 16px
+  side padding in a narrower large frame (a container query on `.frame`), and 13px (`--fs-meta`)
+  with 4px padding and line-height 1.2 in a gallery tile. At each size a 20-letter word fits on one
+  line in a monospace face of 0.6em, and five such words fit above the caption.
 - `h1` letter-spacing is -0.02em. Headings use `line-height: 1.2` and `text-wrap: balance`. Body
   line-height is 1.5.
 - Numbers that change (countdown, slot numbers) use `font-variant-numeric: tabular-nums` (`.num`,
@@ -59,7 +63,8 @@ were not measured one by one.
   column under 820px and two columns from 820px (`1.15fr` frame, `1fr` panel, 40px gap,
   `styles.css:240`). Under 820px (`styles.css:227`) the panel shows its heading, countdown and word
   form before the slot list, so the main action stays on the first phone screen.
-- The gallery grid (`.grid`) is `repeat(auto-fill, minmax(150px, 1fr))`.
+- The gallery grid (`.grid`) is `repeat(auto-fit, minmax(168px, 1fr))` with an 8px gap: one
+  column at 320, two at 390, and the five tiles share the row at 1440.
 - No horizontal scrolling at 320, 390 or 1440, measured by the interaction test and the probe.
 
 ## Elevation & Depth
@@ -73,19 +78,21 @@ backdrop, `z-index: 20`). The connect sheet is a bottom sheet under 640px and ce
 Square corners everywhere (`border-radius: 0`). Outlines are 2px (`--line`) on frames, slot lists,
 buttons, inputs, menus, the sheet and result boxes. Lighter 1px black rules separate slot rows, sheet
 rows, step numbers and the sheet's × button. The frame is a 1:1 square (`aspect-ratio`), and the
-large frame is capped at 64vh.
+large frame is capped at 64vh. Inside, the frame is a two-row grid: the sentence (or the picture)
+fills the first row and the caption is the second, so the caption never covers words.
 
 ## Components
 
 | Component | Source | Use and states |
 | --- | --- | --- |
 | Button `.btn` / `.btn-primary` | `styles.css` (`.btn`), used across `src/` | 44px minimum height. Quiet buttons are white with a black outline; hover `--hover`, pressed `--press`, disabled has grey text and border. Use `.btn-primary` (black fill) for exactly one action per view: "add · 0.1 IMD". Focus shows a 2px `--ink` ring offset 2px (`:focus-visible`, `styles.css:81`). |
-| Frame | `src/Frame.tsx` `Frame` | `size="large"` (play page, image page) or `"small"` (gallery). Words are plain text and `____` stands for open slots. When the image is delivered the frame flips to the picture from `imageURI` through `IPFS_GATEWAYS`, trying the next gateway on error. The caption shows `n/5` and the status line. `FramePlaceholder` in `App.tsx` keeps the same shape while loading. |
+| Frame | `src/Frame.tsx` `Frame` | `size="large"` (play page, image page) or `"small"` (gallery). Words are plain text and `____` stands for open slots. When the image is delivered the frame flips to the picture from `imageURI` through `IPFS_GATEWAYS`, trying the next gateway on error. If every gateway fails the sentence stays and the caption says "image unavailable"; the full result URI is in the image page's details. The caption shows `n/5` and the status line (a short form in gallery tiles: "ordered", "order failed", "3 of 5 words"). `FramePlaceholder` in `App.tsx` keeps the same shape while loading. |
 | Slot list `.slots` | `App.tsx` (`Play`, `ImagePage`) | Five numbered rows. A filled row is `--ink`; an open row is `--faint` "open". On the image page each row also shows `.slot-meta` (the NFT and its holder, linked to OpenSea). |
-| Word form | `src/Actions.tsx` `AddWord` | A labelled input (16px) and the primary button. The help text sits under the input and turns into the error text (`role="alert"`) when the word is invalid. One blocker line says why the button is disabled. Before the first prompt it says "two wallet prompts: approve exactly …". Disconnected, the button opens the connect sheet; on the wrong chain it reads "switch to Ethereum". |
+| Word form | `src/Actions.tsx` `AddWord` | A labelled input (16px) and the primary button. The help text sits under the input and turns into the error text (`role="alert"`) when the word is invalid. One blocker line says why the button is disabled. Before the first prompt it says "two wallet prompts: approve exactly …". Disconnected, the button opens the connect sheet; on the wrong chain it reads "switch to Ethereum". If the price read fails the button reads "add · price unavailable", disabled, with "the image price is unavailable. try again after the next refresh." The draft is cleared only when a receipt shows `WordAdded`; after a decline or a failure the word stays and focus returns to the input. |
 | Steps `.steps` | `Actions.tsx` `Steps` | The numbered steps of a transaction flow, each `todo`, `wait`, `sign`, `mining`, `done` or `error`, with a note and a "view transaction" explorer link. `aria-live="polite"`. A `.result` box under the steps gives what the receipt shows. |
-| Retry | `Actions.tsx` `Retry` | Appears only when `canRetry(image)` is true. A quiet button "order again · {price}" with the same approve-then-call steps. |
-| Wallet control and connect sheet | `src/wallet/ConnectSheet.tsx` | "connect" opens the sheet: EIP-6963 wallets, then Coinbase Wallet; on phones, "open in …" rows first. Rows are 48px with 28px marks (`wallet-icons.ts`). The sheet closes on Escape, the backdrop or ×, keeps focus inside, and returns focus when it closes. Connected, the control shows the short address and opens a menu with the full address and "disconnect". |
+| Retry | `Actions.tsx` `Retry` | Appears when `canRetry(image)` is true: a quiet button "order again · {price}" with the same exact-approve-then-call steps and its switch error under it. Once the order goes through, the button and its note go, and the steps, links and result stay. |
+| Inline action `.linkbtn` | `styles.css` | A button styled as underlined text for an action inside a line, such as "holder unavailable · retry" on the image page. |
+| Wallet control and connect sheet | `src/wallet/ConnectSheet.tsx` | "connect" opens the sheet: wallets announced by EIP-6963 (on any device), a generic "browser wallet" row only when `window.ethereum` exists and nothing announced itself, then Coinbase Wallet. On a phone with no wallet in the page, the "open in …" rows come first ("get Rabby" goes to rabby.io, as Rabby has no page link). On a desktop with none, a note says no browser wallet was found. Rows are 48px with 28px marks (`wallet-icons.ts`). The sheet closes on Escape, the backdrop or ×, keeps focus inside, and returns focus when it closes. Connected, the control shows the short address and opens a menu with the full address and "disconnect"; Escape closes the menu and returns focus to the address button. |
 | Notes, banner, facts | `styles.css` `.note`, `.banner`, `.facts` | `.note` is 13px muted text. `.banner` is an outlined white box for read errors. `.facts` is a two-column `dl` for image details. |
 
 ## Do's and Don'ts

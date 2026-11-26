@@ -61,5 +61,14 @@ fork of mainnet running the deployed contract, with a scripted EIP-6963 wallet. 
 FORK_URL=https://ethereum-rpc.publicnode.com ANVIL=anvil node tests/interaction.mjs
 ```
 
+`web/tests/mock-rpc.mjs` needs no chain: it serves the built export in Chromium, answers the RPC
+URLs from an in-memory contract state decoded with the deployment ABI, and drives a scripted wallet
+through the frame layout, price, exact-approval, decline, retry, connect-sheet, holder and keyboard
+scenarios. It needs only Playwright with a Chromium build:
+
+```
+npm run build && npm run test:mock          # or: node tests/mock-rpc.mjs retry decline
+```
+
 Results, the design review and what was not tested are in `docs/validation.md`. The design
 system is described in `docs/DESIGN.md`.

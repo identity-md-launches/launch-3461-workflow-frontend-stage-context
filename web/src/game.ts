@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useAccount } from "wagmi";
 import { getWalletClient } from "wagmi/actions";
@@ -46,7 +46,8 @@ export type Game = {
   currentImage: number;
   imagesOrdered: number;
   totalSupply: number;
-  amountDue: bigint;
+  /** null when the read failed: an unknown price, never shown as free. */
+  amountDue: bigint | null;
   retryPrice: bigint | null;
   pot: bigint;
   token: { address: Address; symbol: string; decimals: number };
@@ -88,7 +89,7 @@ export function useGame() {
         read<bigint>("currentImage"),
         read<bigint>("imagesOrdered"),
         read<bigint>("totalSupply"),
-        read<bigint>("amountDue").catch(() => 0n),
+        read<bigint>("amountDue").catch(() => null),
         read<bigint>("retryPrice").catch(() => null),
         read<bigint>("pot"),
         read<Address>("imd"),
@@ -155,25 +156,39 @@ export function useMine(token: Address | undefined, image: number) {
   });
 }
 
-/** Current holders of an image's minted tokens, slot by slot. */
+/**
+ * Current holders of an image's minted tokens, one query per slot, so one failed lookup does not
+ * hide the others. Each entry keeps its own data, error state and refetch.
+ */
 export function useHolders(image: number, wordCount: number) {
   const d = useDeployment();
-  return useQuery({
-    queryKey: ["holders", image, wordCount],
-    enabled: wordCount > 0,
-    refetchInterval: 30_000,
-    queryFn: async () =>
-      Promise.all(
-        Array.from({ length: wordCount }, (_, i) =>
-          d.publicClient.readContract({
-            address: d.address,
-            abi: d.abi,
-            functionName: "ownerOf",
-            args: [BigInt((image - 1) * WORDS + i + 1)],
-          }) as Promise<Address>,
-        ),
-      ),
+  return useQueries({
+    queries: Array.from({ length: wordCount }, (_, i) => ({
+      queryKey: ["holder", d.address, image, i + 1],
+      refetchInterval: 30_000,
+      retry: 2,
+      queryFn: () =>
+        d.publicClient.readContract({
+          address: d.address,
+          abi: d.abi,
+          functionName: "ownerOf",
+          args: [BigInt((image - 1) * WORDS + i + 1)],
+        }) as Promise<Address>,
+    })),
   });
+}
+
+/** Shown wherever a price read failed: the button, the click-time recheck and the retry panel. */
+export const PRICE_UNAVAILABLE = "the image price is unavailable. try again after the next refresh.";
+
+/** True when the wallet declined a prompt (EIP-1193 code 4001, or a wallet that only says so). */
+export function isRejection(e: unknown): boolean {
+  if (e instanceof BaseError) {
+    const coded = e.walk((x) => (x as { code?: number }).code === 4001);
+    if (coded) return true;
+  }
+  if ((e as { code?: number })?.code === 4001) return true;
+  return /reject|denied|declined|cancel/i.test((e as Error)?.message ?? "");
 }
 
 export const tokenIdOf = (image: number, slot: number) => (image - 1) * WORDS + slot;
@@ -237,19 +252,28 @@ export function useTxRunner() {
     abi: readonly unknown[];
     functionName: string;
     args: unknown[];
-    /** Skip this step when it is already satisfied (an allowance that is already enough). */
+    /** Skip this step when it is already satisfied (an allowance that already equals the price). */
     skip?: () => Promise<boolean>;
+    /** Note for the skipped step. */
+    skipped?: string;
+    /** Runs before this step is simulated; throws to stop the flow (a price that moved). */
+    before?: () => Promise<void>;
+    /** The step's note when the wallet declines its prompt. */
+    declined?: string;
+    /** Appended to the summary when this step fails: what earlier steps already did onchain. */
+    notDone?: () => string;
     /** Says what the receipt shows; throws when the receipt shows the step did not happen. */
     report: (receipt: TransactionReceipt) => Promise<string>;
   };
 
-  async function run(writes: Write[]) {
+  /** Resolves true only when every step's receipt showed its effect. */
+  async function run(writes: Write[]): Promise<boolean> {
     setRunning(true);
     setResult(null);
     if (!address || chainId !== d.chain.id) {
       setResult({ ok: false, text: !address ? "connect a wallet first." : `switch to ${d.chain.name} first.` });
       setRunning(false);
-      return;
+      return false;
     }
     const st: Step[] = writes.map((w) => ({ label: w.label, state: "todo" }));
     const set = (i: number, s: Partial<Step>) => {
@@ -258,13 +282,22 @@ export function useTxRunner() {
     };
     setSteps([...st]);
     let last = "";
+    let cur = 0;
+    let rejected = false;
     try {
       for (let i = 0; i < writes.length; i++) {
+        cur = i;
         const w = writes[i]!;
         set(i, { state: "wait", note: "checking…" });
-        if (w.skip && (await w.skip())) {
-          set(i, { state: "done", note: "already done" });
-          continue;
+        try {
+          if (w.skip && (await w.skip())) {
+            set(i, { state: "done", note: w.skipped ?? "already done" });
+            continue;
+          }
+          if (w.before) await w.before();
+        } catch (e) {
+          set(i, { state: "error", note: describeError(e) });
+          throw e;
         }
         let request;
         try {
@@ -285,7 +318,8 @@ export function useTxRunner() {
           const wallet = await getWalletClient(d.wagmi, { chainId: d.chain.id, account: address });
           hash = await wallet.writeContract({ ...(request as object), account: address, chain: d.chain } as never);
         } catch (e) {
-          set(i, { state: "error", note: describeError(e) });
+          rejected = isRejection(e);
+          set(i, { state: "error", note: rejected ? (w.declined ?? "the wallet declined. nothing was sent.") : describeError(e) });
           throw e;
         }
         set(i, { state: "mining", hash, note: "waiting for the block…" });
@@ -303,8 +337,16 @@ export function useTxRunner() {
         set(i, { state: "done", hash, note: last });
       }
       setResult({ ok: true, text: last });
+      return true;
     } catch (e) {
-      setResult({ ok: false, text: describeError(e) === "reverted" ? "the transaction reverted." : describeError(e) });
+      const after = writes[cur]?.notDone?.() ?? "";
+      const reason = rejected
+        ? (writes[cur]?.declined ?? "the wallet declined. nothing was sent.")
+        : describeError(e) === "reverted"
+          ? "the transaction reverted."
+          : describeError(e);
+      setResult({ ok: false, text: rejected && after ? after : after ? `${reason} ${after}` : reason });
+      return false;
     } finally {
       setRunning(false);
     }
